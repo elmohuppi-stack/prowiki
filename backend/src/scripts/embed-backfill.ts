@@ -4,11 +4,11 @@
  *
  * Embeddet alle chunks mit embedding IS NULL – nutzt den OpenAI-kompatiblen
  * Array-Input (viele Chunks pro Request) statt einzeln, daher ~100x schneller
- * als embedWorkspaceChunks. Für den Wiki-Chunk-Backfill nach dem Import.
+ * als embedWikiChunks. Für den Wiki-Chunk-Backfill nach dem Import.
  *
  * Usage:
- *   bun run src/scripts/embed-backfill.ts [workspace-id] [--batch=128]
- *   (ohne workspace-id: alle Workspaces)
+ *   bun run src/scripts/embed-backfill.ts [wiki-id] [--batch=128]
+ *   (ohne wiki-id: alle Wikis)
  */
 
 import { db } from "../db/index.ts";
@@ -16,7 +16,7 @@ import { chunks, modelProviders } from "../db/schema.ts";
 import { eq, and, isNull, sql } from "drizzle-orm";
 
 const args = process.argv.slice(2);
-const wsFilter = args.find((a) => !a.startsWith("--")) || null;
+const wikiFilter = args.find((a) => !a.startsWith("--")) || null;
 const batchSize = Number(
   (args.find((a) => a.startsWith("--batch=")) || "").split("=")[1] || 128,
 );
@@ -68,11 +68,11 @@ async function main() {
     .select({ total: sql<number>`count(*)` })
     .from(chunks)
     .where(
-      wsFilter
-        ? and(isNull(chunks.embedding), eq(chunks.workspace_id, wsFilter))
+      wikiFilter
+        ? and(isNull(chunks.embedding), eq(chunks.wiki_id, wikiFilter))
         : isNull(chunks.embedding),
     );
-  console.log(`📊 ${total} Chunks ohne Embedding${wsFilter ? ` (workspace ${wsFilter})` : ""}`);
+  console.log(`📊 ${total} Chunks ohne Embedding${wikiFilter ? ` (Wiki ${wikiFilter})` : ""}`);
   if (Number(total) === 0) {
     console.log("✨ Nichts zu tun.");
     process.exit(0);
@@ -87,8 +87,8 @@ async function main() {
       .select({ id: chunks.id, content: chunks.content })
       .from(chunks)
       .where(
-        wsFilter
-          ? and(isNull(chunks.embedding), eq(chunks.workspace_id, wsFilter))
+        wikiFilter
+          ? and(isNull(chunks.embedding), eq(chunks.wiki_id, wikiFilter))
           : isNull(chunks.embedding),
       )
       .limit(batchSize);

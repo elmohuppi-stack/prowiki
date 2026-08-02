@@ -173,11 +173,61 @@ Gesamtkosten Infrastruktur nach dieser Wahl (XL+ Produktion + L+ Staging, beide
 
 Gegenüber den LLM-Kosten eines einzigen vollständigen Kanal-Imports der kleinere Posten.
 
-**prowikis Datenbank kommt aus `pg-shared` heraus.** Kundendaten gehören nicht in dieselbe
-Postgres-Instanz wie Wetter-App und Benzinpreise — erst recht nicht, solange die App-Rolle
-dort SUPERUSER ist (Befund 2.8). Eine eigene Instanz erledigt diesen offenen Punkt
-nebenbei und ist Voraussetzung für Row-Level-Security aus 4.1.
+---
 
-Rund 40 €/Monat für Produktion plus Staging — gegenüber den LLM-Kosten eines einzigen
-vollständigen Kanal-Imports der kleinere Posten.
+## 3. Verhältnis zum bestehenden Server `helsinki-80gb`
+
+Der Hausleitfaden für den bestehenden Server steht in
+`~/workspace/optimize-hetzner` — [`ARCHITEKTUR.md`](../../optimize-hetzner/ARCHITEKTUR.md)
+(Sollzustand), [`DEPLOYMENT.md`](../../optimize-hetzner/DEPLOYMENT.md) (Bedienung),
+[`OFFENE-PROBLEME.md`](../../optimize-hetzner/OFFENE-PROBLEME.md) (Ist-Abweichungen).
+prowiki hält sich daran, auch wenn es später auf einer eigenen Maschine läuft: die Regeln
+sind aus realen Ausfällen abgeleitet, nicht aus Geschmack.
+
+### Eigene Postgres-Instanz — kein Verstoß gegen die Hausregel
+
+`ARCHITEKTUR.md` verbietet Apps auf `helsinki-80gb` einen eigenen Postgres-Container
+(Abschnitt 12) und verlangt „geteilte Infrastruktur, getrennte Daten". Das gilt **für Apps
+auf diesem Host**. prowiki zieht auf eine eigene Maschine (Abschnitt 2) und bringt dort
+seine eigene Instanz mit — das ist kein Nebeneinander zweier Postmaster auf einem Host,
+sondern eine getrennte Umgebung.
+
+> **Korrektur gegenüber einer früheren Fassung dieses Dokuments.** Hier stand als
+> Begründung, die App-Rolle in `pg-shared` sei SUPERUSER. **Das stimmt seit dem 2. August
+> nicht mehr** (`OFFENE-PROBLEME.md` Punkt 5): `knora_app`, `mediathek`, `umami` und
+> `mathe_user` sind alle unprivilegiert, `knora` ist nur noch Wartungsrolle. Die
+> Trennungsentscheidung trägt trotzdem — sie steht auf Kapazität und Mandantentrennung,
+> nicht auf einem behobenen Rechtefehler: der 3,7-GB-Host trägt prowikis Vektorindizes
+> nicht, und eine Instanz mit Kundendaten sollte nicht neben Hobby-Apps liegen, deren
+> Lastspitzen niemand budgetiert.
+
+### Was prowiki aus dem Leitfaden übernimmt
+
+| Regel | Quelle | Umsetzung in prowiki |
+|---|---|---|
+| Unprivilegierte App-Rolle je Datenbank | ARCH 4.1 | `prowiki_app`, kein SUPERUSER/CREATEDB/CREATEROLE; `REVOKE CONNECT … FROM PUBLIC` |
+| Pool-Obergrenze explizit setzen | ARCH 4.2 | `DB_POOL_MAX`, Default 10 statt der 20 aus knora |
+| Kanonischer DB-Hostname, kein `db`/`postgres` | ARCH 4.3 | `pg-shared` bzw. der Instanzname; nie ein generischer Alias |
+| Nur vorhandene Extensions voraussetzen | ARCH 4.4 | `vector`, `pg_trgm` — beide im Image `pgvector/pgvector:pg17` |
+| Portblock aus der Vergabeliste | ARCH 5 | **3101 / 3102** (dort als nächste freie Vergabe geführt) |
+| Ports nur auf `127.0.0.1`, DB gar nicht | ARCH 6 | Prod- und Dev-Compose gebunden, DB nie auf `0.0.0.0` |
+| `hetzner-network` als `external: true`, `- default` mitlisten | ARCH 6 | aus knora übernommen und erfüllt |
+| Eigener Healthcheck gegen die eigene App | ARCH 6, 10 | `/health` mit `select 1`, 503 im Fehlerfall |
+| `mem_limit` überall | ARCH 8 | app 768 MB, frontend 128 MB, parser 1 GB; Worker kommt dazu |
+| Indexe gehören in die Migration, auch die teuren | ARCH 7.1 | HNSW mit `vector_cosine_ops` in der ersten Migration, nicht als Kommentar |
+| `shm_size: 1g` für Index-Builds | ARCH 7.1 | im Dev-Compose gesetzt |
+| Technische Identifikatoren `COLLATE "C"` | ARCH 7.3 | Slugs, `user.email`, `session.token`, `external_id`, `key_hash` |
+| Migrationen vorwärts-only, nummeriert, im Repo | ARCH 7.4 | Drizzle-Kette wie in knora |
+| Pflichtvariablen mit `${VAR:?…}` | ARCH 9 | `AUTH_SECRET`, `APP_BASE_URL`, `DB_USER`, `DB_PASSWORD` |
+| Täglicher Dump mit geprüftem Restore | ARCH 10, DEPL 7 | auf der neuen Maschine einzurichten — **offen** |
+
+### Vor dem ersten Deploy zu erledigen
+
+- [ ] Datenbank + Rolle `prowiki_app` anlegen, `REVOKE CONNECT … FROM PUBLIC`
+- [ ] Portblock 3101/3102 gegen `sites-available` gegenprüfen (nicht `sites-enabled` —
+      daraus entstand die openclaw/knora-Kollision)
+- [ ] nginx-Vhost **und** Symlink, Zertifikat per certbot
+- [ ] `/var/www/prowiki` als Git-Checkout, `.env` mit Mode `600`
+- [ ] Backup samt Restore-Test einrichten, bevor Kundendaten darauf liegen
+- [ ] Deploy-Weg in `optimize-hetzner/DEPLOYMENT.md` ergänzen
 

@@ -5,78 +5,15 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1784352386966,
-      "tag": "0000_salty_avengers",
+      "when": 1785676640286,
+      "tag": "0000_init_prowiki",
       "breakpoints": true
     },
     {
       "idx": 1,
       "version": "7",
-      "when": 1784355204057,
-      "tag": "0001_organic_shriek",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1784446460229,
-      "tag": "0002_naive_ultimo",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1784450080918,
-      "tag": "0003_careless_ghost_rider",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1784454779412,
-      "tag": "0004_polite_mongoose",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1785323035520,
-      "tag": "0005_flowery_spyke",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1785323035521,
-      "tag": "0006_owner_membership",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1785350423234,
-      "tag": "0007_search_indexes",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
-      "when": 1785650400000,
-      "tag": "0008_wiki_search_trgm",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "7",
-      "when": 1785650400001,
-      "tag": "0009_hnsw_index",
-      "breakpoints": true
-    },
-    {
-      "idx": 10,
-      "version": "7",
-      "when": 1785650400002,
-      "tag": "0010_collate_c_identifiers",
+      "when": 1785676641286,
+      "tag": "0001_collate_and_search_indexes",
       "breakpoints": true
     }
   ]

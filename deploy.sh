@@ -1,50 +1,85 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# .env laden falls vorhanden (für DEPLOY_HOST etc.)
+# Deploy prowiki.
+#
+# ACHTUNG: Dieses Skript stammt aus knora und zeigte dort auf /var/www/knora.
+# Unverändert übernommen hätte es prowiki in knoras Verzeichnis deployt und dort
+# einen fremden Branch ausgecheckt. Der Zielpfad hängt deshalb am APP_SLUG und
+# wird vor jedem Lauf gegengeprüft.
+#
+# Voraussetzungen auf dem Server (siehe optimize-hetzner/ARCHITEKTUR.md 11):
+#   - /var/www/prowiki ist ein Git-Checkout dieses Repos
+#   - .env liegt dort mit Mode 600
+#   - Datenbank + unprivilegierte Rolle sind angelegt
+#   - nginx-Vhost in sites-available UND Symlink in sites-enabled
+#   - Portblock 3101/3102 ist vergeben
+
+APP_SLUG="${APP_SLUG:-prowiki}"
+REMOTE_DIR="/var/www/${APP_SLUG}"
+
 if [ -f .env ]; then
   set -a
+  # shellcheck disable=SC1091
   source .env
   set +a
 fi
 
-# Args: [branch] <host>
-# Erkennt ob erstes Argument ein Hostname (mit @) oder Branch ist,
-# damit alter Aufruf ./deploy.sh user@host weiterhin funktioniert.
-if [[ "$1" == *"@"* ]]; then
+if [[ "${1:-}" == *"@"* ]]; then
   HOST="$1"
   BRANCH="${2:-main}"
 else
   BRANCH="${1:-main}"
-  HOST="${2:-$DEPLOY_HOST}"
+  HOST="${2:-${DEPLOY_HOST:-}}"
 fi
 
-if [ -z "$HOST" ]; then
-  echo "Usage: ./deploy.sh [branch] [host]"
-  echo ""
-  echo "Examples:"
-  echo "   ./deploy.sh elmarhepp                 # main branch"
-  echo "   ./deploy.sh main elmarhepp             # bestimmter branch"
-  echo "   ./deploy.sh feature-x elmarhepp        # feature branch"
-  echo ""
-  echo "Or set DEPLOY_HOST environment variable:"
-  echo "   export DEPLOY_HOST=elmarhepp"
-  echo "   ./deploy.sh                           # branch=main"
-  echo "   ./deploy.sh feature-x                 # branch=feature-x"
+if [ -z "${HOST:-}" ]; then
+  cat <<'USAGE'
+Usage: ./deploy.sh [branch] [host]
+
+  ./deploy.sh elmarhepp              # main
+  ./deploy.sh main elmarhepp         # bestimmter Branch
+  ./deploy.sh feature-x elmarhepp
+
+Oder DEPLOY_HOST setzen:
+  export DEPLOY_HOST=elmarhepp
+USAGE
   exit 1
 fi
 
-echo "🚀 Deploying Knora to $HOST (branch: $BRANCH) ..."
+echo "🚀 prowiki → $HOST:$REMOTE_DIR (Branch: $BRANCH)"
 
+# Sicherung gegen genau den Fehler, den die knora-Fassung dieses Skripts
+# ermöglicht hätte: ins falsche Verzeichnis deployen.
+ssh "$HOST" "test -d '$REMOTE_DIR/.git'" || {
+  echo "❌ $REMOTE_DIR ist kein Git-Checkout — Abbruch." >&2
+  exit 1
+}
+
+REMOTE_ORIGIN=$(ssh "$HOST" "git -C '$REMOTE_DIR' remote get-url origin")
+case "$REMOTE_ORIGIN" in
+  *prowiki*) ;;
+  *)
+    echo "❌ $REMOTE_DIR zeigt auf '$REMOTE_ORIGIN', nicht auf prowiki — Abbruch." >&2
+    exit 1
+    ;;
+esac
+
+# Anti-Pattern aus ARCHITEKTUR.md 12: ein Compose-Stand mit eigenem Postgres
+# würde einen zweiten Postmaster auf einem fremden Datenverzeichnis starten.
 ssh "$HOST" "
-  cd /var/www/knora && \
-  git fetch origin && \
-  git checkout '$BRANCH' && \
-  git pull origin '$BRANCH' && \
+  set -e
+  cd '$REMOTE_DIR'
+  git fetch origin
+  git checkout '$BRANCH'
+  git pull origin '$BRANCH'
+  if grep -qE 'image: (pgvector|postgres)' docker-compose.yml; then
+    echo '❌ docker-compose.yml enthält einen eigenen Postgres-Service — Abbruch.' >&2
+    exit 1
+  fi
   docker compose up -d --build
 "
 
-echo "✅ Deployed successfully!"
-echo "   App:    https://knora.elmarhepp.de"
-echo "   API:    https://knora.elmarhepp.de/api/v1/…  (das Frontend proxyt /api/ intern zu app:3000)"
-echo "   Health: https://knora.elmarhepp.de/health"
+echo "✅ Deployt. Prüfen:"
+echo "   ssh $HOST 'docker compose --project-directory $REMOTE_DIR ps'"
+echo "   curl -s https://${APP_SLUG}.elmarhepp.de/health"

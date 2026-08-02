@@ -3,11 +3,16 @@ services:
     image: pgvector/pgvector:pg17
     volumes:
       - dev-data:/var/lib/postgresql/data
+    # Dockers Default für /dev/shm sind 64 MB. Der HNSW-Aufbau über die
+    # Chunk-Embeddings scheitert dann mit „could not resize shared memory
+    # segment" — auf dem Server läuft pg-shared aus demselben Grund mit 1 GB.
+    shm_size: 1g
     ports:
-      # 5433 statt 5432: knora läuft auf derselben Maschine in der Entwicklung
-      # noch parallel und belegt 5432, bis es abgeschaltet wird (Abschaltkriterium
-      # in docs/KONZEPT.md).
-      - "5433:5432"
+      # Nicht 5432 (knora, läuft parallel bis zum Abschaltkriterium aus
+      # docs/KONZEPT.md) und nicht 5433 (Nachbarprojekt wv-db). Vor dem ersten
+      # Start gegenprüfen:
+      #   docker ps --format '{{.Names}}\t{{.Ports}}' | grep 543
+      - "127.0.0.1:5434:5432"
     environment:
       POSTGRES_USER: prowiki
       POSTGRES_PASSWORD: prowiki-dev
@@ -25,7 +30,7 @@ services:
     build: ./parser
     # 8002 aus demselben Grund wie der DB-Port oben.
     ports:
-      - "8002:8000"
+      - "127.0.0.1:8002:8000"
     volumes:
       - ./parser:/app
     environment:

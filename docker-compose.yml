@@ -7,14 +7,16 @@ services:
     # über das appnet-Netzwerk. Ein Host-Mapping würde mit FRONTEND_PORT kollidieren,
     # wenn WEB_PORT == FRONTEND_PORT gesetzt ist.
     # ports:
-    #   - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    #   - "127.0.0.1:${WEB_PORT:-3102}:3000"
     environment:
       # Pflichtvariablen mit :? statt :- – ein fehlender Wert bricht den Start ab,
-      # statt still auf einen Default zurückzufallen. Mit `${JWT_SECRET:-dev-secret-change-me}`
+      # statt still auf einen Default zurückzufallen. Mit `${AUTH_SECRET:-dev-secret-change-me}`
       # wäre eine verlorene .env unbemerkt geblieben: die App liefe weiter, aber mit
       # einem Secret, das im Repo steht, und jeder könnte sich Admin-Tokens ausstellen.
       DATABASE_URL: postgresql://${DB_USER:?DB_USER fehlt in .env}:${DB_PASSWORD:?DB_PASSWORD fehlt in .env}@pg-shared:5432/prowiki
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET fehlt in .env}
+      AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET fehlt in .env}
+      APP_BASE_URL: ${APP_BASE_URL:?APP_BASE_URL fehlt in .env}
+      TRUSTED_ORIGINS: ${TRUSTED_ORIGINS:-}
       PARSER_URL: http://parser:8000/parse
       PORT: 3000
       # YouTube-Transkript-Provider (Apify/Supadata) – von Hetzner-IPs ist YouTube gesperrt,
@@ -66,7 +68,9 @@ services:
     environment:
       # Siehe app-Service: Pflichtvariablen, kein stiller Default.
       DATABASE_URL: postgresql://${DB_USER:?DB_USER fehlt in .env}:${DB_PASSWORD:?DB_PASSWORD fehlt in .env}@pg-shared:5432/prowiki
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET fehlt in .env}
+      AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET fehlt in .env}
+      APP_BASE_URL: ${APP_BASE_URL:?APP_BASE_URL fehlt in .env}
+      TRUSTED_ORIGINS: ${TRUSTED_ORIGINS:-}
       PARSER_URL: http://parser:8000/parse
       YOUTUBE_TRANSCRIPT_PROVIDER: ${YOUTUBE_TRANSCRIPT_PROVIDER:-}
       APIFY_API_KEY: ${APIFY_API_KEY:-}
@@ -92,7 +96,7 @@ services:
     build:
       context: ./frontend
     ports:
-      - "127.0.0.1:${FRONTEND_PORT:-3084}:80"
+      - "127.0.0.1:${FRONTEND_PORT:-3101}:80"
     depends_on:
       app:
         condition: service_started

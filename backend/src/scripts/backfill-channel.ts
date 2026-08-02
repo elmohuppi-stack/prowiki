@@ -11,7 +11,7 @@
  * /documents/:id/refresh-metadata) pro Video nutzen.
  *
  * Usage:
- *   bun run src/scripts/backfill-channel.ts [--dry-run] [--workspace <id>]
+ *   bun run src/scripts/backfill-channel.ts [--dry-run] [--wiki <id>]
  */
 
 import { db } from "../db/index.ts";
@@ -20,18 +20,18 @@ import { and, eq, isNull, or } from "drizzle-orm";
 
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
-const wsIdx = args.indexOf("--workspace");
-const workspaceId = wsIdx >= 0 ? args[wsIdx + 1] : undefined;
+const wikiIdx = args.indexOf("--wiki");
+const wikiId = wikiIdx >= 0 ? args[wikiIdx + 1] : undefined;
 
 const CHANNEL_RE = /\*\*Kanal\*\*:\s*(.+)/;
 
 async function main() {
   console.log(
-    `[backfill-channel] Start${dryRun ? " (DRY-RUN)" : ""}${workspaceId ? `, Workspace ${workspaceId}` : ""}`,
+    `[backfill-channel] Start${dryRun ? " (DRY-RUN)" : ""}${wikiId ? `, Wiki ${wikiId}` : ""}`,
   );
 
   const conditions = [eq(documents.type, "youtube")];
-  if (workspaceId) conditions.push(eq(documents.workspace_id, workspaceId));
+  if (wikiId) conditions.push(eq(documents.wiki_id, wikiId));
   // Nur Dokumente ohne gesetzten Kanal.
   conditions.push(or(isNull(documents.channel), eq(documents.channel, ""))!);
 

@@ -114,10 +114,12 @@ dieses Wiki öffentlich verfügbar" — hat aktuell keinen einzigen Anknüpfungs
 - `workspaceParamAccess()` (Zeile 135) fällt auf „erste UUID im Pfad" zurück, wenn der
   Router-Parameter fehlt. Pragmatisch, aber die Autorisierung sollte nicht an einem
   Regex über dem Pfad hängen.
-- Der DB-Nutzer der App ist auf dem Server **SUPERUSER** in einer Instanz, die vier Apps
-  teilen (in `knora/docs/optimize-knora.md` als offen dokumentiert). Für ein
-  mandantenfähiges Produkt mit Row-Level-Security ist eine unprivilegierte Rolle
-  Voraussetzung, nicht Kosmetik.
+- ~~Der DB-Nutzer der App ist auf dem Server **SUPERUSER**.~~ **Erledigt am 2. August**
+  (`optimize-hetzner/OFFENE-PROBLEME.md` Punkt 5): knora verbindet sich seit dem Umbau als
+  unprivilegierte Rolle `knora_app`; `knora` ist nur noch Bootstrap- und Wartungsrolle und
+  gehört in keinen Verbindungsstring. Für prowiki gilt dieselbe Regel von Anfang an — eine
+  eigene, unprivilegierte Rolle je Datenbank, ohne SUPERUSER, CREATEROLE, CREATEDB,
+  REPLICATION oder BYPASSRLS. Das ist zugleich Voraussetzung für Row-Level-Security (4.1).
 
 ### 2.9 Empfehlung: Auth nicht selbst bauen
 

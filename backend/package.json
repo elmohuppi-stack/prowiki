@@ -10,7 +10,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "db:seed": "bun run src/db/seed.ts"
+    "bootstrap-org": "bun run src/scripts/bootstrap-org.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.11",

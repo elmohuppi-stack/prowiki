@@ -2,15 +2,15 @@
 /**
  * Themen-Backfill (Ebene 1)
  *
- * Klassifiziert bestehende Dokumente eines Workspace per LLM gegen den bereits
+ * Klassifiziert bestehende Dokumente eines Wikis per LLM gegen den bereits
  * definierten Themenkatalog und legt Auto-Zuordnungen an (überschreibt keine
  * Handedits). Läuft SEQUENZIELL (ein Dokument nach dem anderen) – schont den
  * kleinen Prod-Host (3,7 GB RAM).
  *
- * Voraussetzung: Der Workspace hat bereits Themen (sonst nichts zu tun).
+ * Voraussetzung: Das Wiki hat bereits Themen (sonst nichts zu tun).
  *
  * Usage:
- *   bun run src/scripts/backfill-topics.ts --workspace <id> [--dry-run]
+ *   bun run src/scripts/backfill-topics.ts --wiki <id> [--dry-run]
  */
 
 import { db } from "../db/index.ts";
@@ -20,29 +20,29 @@ import { listTopics, classifyText, assignAutoTopics, getDocumentTopicIds } from 
 
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
-const wsIdx = args.indexOf("--workspace");
-const workspaceId = wsIdx >= 0 ? args[wsIdx + 1] : undefined;
+const wikiIdx = args.indexOf("--wiki");
+const wikiId = wikiIdx >= 0 ? args[wikiIdx + 1] : undefined;
 
 async function main() {
-  if (!workspaceId) {
-    console.error("Bitte --workspace <id> angeben.");
+  if (!wikiId) {
+    console.error("Bitte --wiki <id> angeben.");
     process.exit(1);
   }
-  const topics = await listTopics(workspaceId);
+  const topics = await listTopics(wikiId);
   if (topics.length === 0) {
     console.error(
-      "Der Workspace hat noch keine Themen. Erst Themen anlegen (UI: Vorschläge generieren), dann Backfill.",
+      "Das Wiki hat noch keine Themen. Erst Themen anlegen (UI: Vorschläge generieren), dann Backfill.",
     );
     process.exit(1);
   }
   console.log(
-    `[backfill-topics] ${topics.length} Themen im Workspace${dryRun ? " (DRY-RUN)" : ""}`,
+    `[backfill-topics] ${topics.length} Themen im Wiki${dryRun ? " (DRY-RUN)" : ""}`,
   );
 
   const docs = await db
     .select()
     .from(documents)
-    .where(eq(documents.workspace_id, workspaceId));
+    .where(eq(documents.wiki_id, wikiId));
   console.log(`[backfill-topics] ${docs.length} Dokumente`);
 
   const byId = new Map(topics.map((t) => [t.id, t.label]));
@@ -69,7 +69,7 @@ async function main() {
       .limit(1);
     const text = sumPage?.summary || sumPage?.content || doc.title;
 
-    const topicIds = await classifyText(workspaceId, text);
+    const topicIds = await classifyText(wikiId, text);
     const labels = topicIds.map((id) => byId.get(id)).filter(Boolean);
     console.log(
       `  • ${doc.title.slice(0, 55)} → ${labels.length ? labels.join(", ") : "(keine)"}`,

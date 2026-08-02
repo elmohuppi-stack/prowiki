@@ -131,14 +131,24 @@ bun install
 
 cd backend
 bun run db:migrate
+
+# Nach der Registrierung des ersten Kontos (Verifikationslink steht im
+# Backend-Log) eine Organisation anlegen und sich zum Inhaber machen:
+# bun run bootstrap-org --email you@example.com --org "Meine Redaktion" --wiki "Archiv"
 cd ..
 
 bun run dev              # Backend, Hot-Reload
 cd frontend && bun run dev
 ```
 
-Die Entwicklungs-Datenbank läuft auf **Port 5433** und der Parser auf **8002**, damit knora
-auf derselben Maschine parallel weiterlaufen kann, bis es abgeschaltet wird.
+Die Entwicklungs-Datenbank läuft auf **Port 5434** und der Parser auf **8002** — 5432 belegt
+knora (läuft parallel bis zum Abschaltkriterium), 5433 ein Nachbarprojekt. Vor dem ersten
+Start gegenprüfen: `docker ps --format '{{.Names}}\t{{.Ports}}' | grep 543`.
+
+**Es gibt kein Seed-Skript mit Admin-Zugangsdaten.** Konten entstehen ausschließlich über
+die reguläre Registrierung mit E-Mail-Verifikation; `bootstrap-org` vergibt nur
+Mitgliedschaft an ein bestehendes Konto und kann weder ein Konto anlegen noch ein Passwort
+setzen.
 
 ---
 

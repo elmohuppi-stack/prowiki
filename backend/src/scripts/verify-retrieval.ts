@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
 /**
- * Verifiziert die RAG-Retrieval (wie sie der Chat nutzt) für jeden Workspace.
+ * Verifiziert die RAG-Retrieval (wie sie der Chat nutzt) für jedes Wiki.
  * Ruft hybridSearch mit einer typischen Frage auf und zeigt, ob Dokument- UND
  * Wiki-Artikel-Chunks gefunden werden.
  */
 import { db } from "../db/index.ts";
-import { workspaces } from "../db/schema.ts";
+import { wikis } from "../db/schema.ts";
 import { inArray } from "drizzle-orm";
 import { hybridSearch } from "../service/search.ts";
 
@@ -16,14 +16,14 @@ const QUERIES: Record<string, string> = {
 };
 
 async function main() {
-  const wss = await db
+  const wikiList = await db
     .select()
-    .from(workspaces)
-    .where(inArray(workspaces.name, Object.keys(QUERIES)));
-  for (const ws of wss.filter((w) => QUERIES[w.name])) {
-    const q = QUERIES[ws.name];
-    console.log(`\n${"=".repeat(60)}\n📂 ${ws.name}\n❓ ${q}`);
-    const results = await hybridSearch(ws.id, q, 8);
+    .from(wikis)
+    .where(inArray(wikis.name, Object.keys(QUERIES)));
+  for (const wiki of wikiList.filter((w) => QUERIES[w.name])) {
+    const q = QUERIES[wiki.name];
+    console.log(`\n${"=".repeat(60)}\n📂 ${wiki.name}\n❓ ${q}`);
+    const results = await hybridSearch(wiki.id, q, 8);
     let docHits = 0;
     let wikiHits = 0;
     for (const r of results) {
