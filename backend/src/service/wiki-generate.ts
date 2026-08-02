@@ -13,7 +13,7 @@ import {
   documents,
   wikiPages,
   modelProviders,
-  workspaces,
+  wikis,
   chunks,
 } from "../db/schema.ts";
 import { eq, and, inArray } from "drizzle-orm";
@@ -33,7 +33,7 @@ import {
 import * as wikiService from "./wiki.ts";
 import * as topicService from "./topic.ts";
 import { getActiveProvider, callLLM, callLLMJson } from "./llm.ts";
-import { glossarForPrompt } from "../scripts/lib/rki-glossar.ts";
+import { getGlossary, glossaryForPrompt } from "./glossary.ts";
 
 // ---------------------------------------------------------------------------
 // Typen
@@ -124,11 +124,11 @@ function normalizeKey(text: string): string {
 
 export async function generateWikiArticles(
   docId: string,
-  workspaceId: string,
+  wikiId: string,
 ): Promise<{ summary: any; entities: number; concepts: number } | null> {
   const t0 = Date.now();
   console.log(`[wiki-gen] ========== START ==========`);
-  console.log(`[wiki-gen] Dokument: ${docId}, Workspace: ${workspaceId}`);
+  console.log(`[wiki-gen] Dokument: ${docId}, Wiki: ${wikiId}`);
 
   // 1. Dokument laden
   const [doc] = await db
@@ -149,11 +149,11 @@ export async function generateWikiArticles(
     return null;
   }
 
-  // 3. Workspace-Konfiguration laden
+  // 3. Wiki-Konfiguration laden
   const [ws] = await db
     .select()
-    .from(workspaces)
-    .where(eq(workspaces.id, workspaceId))
+    .from(wikis)
+    .where(eq(wikis.id, wikiId))
     .limit(1);
   const language = ws?.wiki_config?.wiki_language || "de";
   const granularity = ws?.wiki_config?.extraction_granularity || "standard";
@@ -181,7 +181,7 @@ export async function generateWikiArticles(
   //
   // Bewusst schlank und UNBEGRENZT statt listPages({page_size: 500}):
   //  - Das 500er-Fenster war nach updated_at sortiert und füllte sich in einem
-  //    großen Workspace mit `summary-<uuid>`-Slugs. Die sind als Linkziel
+  //    großen Wiki mit `summary-<uuid>`-Slugs. Die sind als Linkziel
   //    nutzlos und verdrängten die echten Themenseiten aus dem Prompt – das LHM
   //    sah bestehende Slugs nicht mehr und erfand neue, sodass ein Thema
   //    mehrere konkurrierende Seiten bekam statt einer wachsenden.
@@ -196,7 +196,7 @@ export async function generateWikiArticles(
     .from(wikiPages)
     .where(
       and(
-        eq(wikiPages.workspace_id, workspaceId),
+        eq(wikiPages.wiki_id, wikiId),
         inArray(wikiPages.page_type, ["entity", "concept"]),
       ),
     );
@@ -348,10 +348,10 @@ export async function generateWikiArticles(
         .replace(/\{\{sessionLabel\}\}/g, doc.title)
         .replace("{{extractedSlugs}}", extractedSlugsText || "Keine")
         // Nur geprüfte Auflösungen. Kürzel, die nicht in dieser Liste stehen,
-        // darf das Modell laut Prompt nicht auflösen – siehe rki-glossar.ts.
+        // darf das Modell laut Prompt nicht auflösen – siehe service/glossary.ts.
         .replace(
           "{{glossar}}",
-          docKind === "meeting_protocol" ? glossarForPrompt() : "Keines",
+          glossaryForPrompt(await getGlossary(doc.wiki_id)),
         ),
     );
     if (!summaryRaw) {
@@ -429,7 +429,7 @@ export async function generateWikiArticles(
     // bisherige Summary-Slug (Rückwärtskompatibilität + sauberer Re-Import).
     const chapterSlug = multiChapter ? `${baseSlug}-k${i + 1}` : baseSlug;
 
-    const page = await upsertPage(workspaceId, chapterSlug, {
+    const page = await upsertPage(wikiId, chapterSlug, {
       title: chapterTitle,
       content: body,
       summary: summaryLine,
@@ -455,7 +455,7 @@ export async function generateWikiArticles(
       `# ${doc.title}\n\n` +
       `Dieses Dokument ist in ${chapters.length} Kapitel gegliedert.\n\n` +
       `## Kapitel\n\n${chapterLinks.join("\n")}`;
-    summaryPage = await upsertPage(workspaceId, baseSlug, {
+    summaryPage = await upsertPage(wikiId, baseSlug, {
       title: doc.title,
       content: overviewContent,
       summary: `Übersicht über ${chapters.length} Kapitel aus „${doc.title}".`,
@@ -585,7 +585,7 @@ export async function generateWikiArticles(
   }
 
   for (const item of toProcess) {
-    const existing = await wikiService.getPage(workspaceId, item.slug);
+    const existing = await wikiService.getPage(wikiId, item.slug);
 
     // <new_information> aus zitierten Chunks (wörtlich) bauen; Fallback: details
     const labels = [...(citationsBySlug.get(item.slug) || [])];
@@ -623,7 +623,7 @@ export async function generateWikiArticles(
     const pageType = item.slug.startsWith("entity/") ? "entity" : "concept";
 
     if (existing) {
-      await wikiService.updatePage(workspaceId, item.slug, {
+      await wikiService.updatePage(wikiId, item.slug, {
         title: existing.title,
         content: body,
         summary: sumMatch?.[1]?.trim() || item.description,
@@ -632,7 +632,7 @@ export async function generateWikiArticles(
       await mergeChunkRefs(existing.id, citedIds);
     } else {
       const page = await wikiService.createPage({
-        workspace_id: workspaceId,
+        wiki_id: wikiId,
         slug: item.slug,
         title: item.name,
         content: body,
@@ -648,7 +648,7 @@ export async function generateWikiArticles(
       }
     }
 
-    // Zählt erstellte UND aktualisierte Seiten (Slugs sind workspace-global,
+    // Zählt erstellte UND aktualisierte Seiten (Slugs sind wiki-global,
     // bei Re-Import laufen bestehende Seiten über den Merge-Zweig)
     if (pageType === "entity") entityCount++;
     else conceptCount++;
@@ -676,13 +676,13 @@ export async function generateWikiArticles(
       await db
         .select({ slug: wikiPages.slug })
         .from(wikiPages)
-        .where(eq(wikiPages.workspace_id, workspaceId))
+        .where(eq(wikiPages.wiki_id, wikiId))
     ).map((r) => r.slug),
   );
 
   // Für jede betroffene Seite: Links von anderen Seiten einfügen + tote Links entfernen
   for (const slug of affectedSlugs) {
-    const page = await wikiService.getPage(workspaceId, slug);
+    const page = await wikiService.getPage(wikiId, slug);
     if (!page || !page.content) continue;
 
     const refs = toProcess
@@ -693,7 +693,7 @@ export async function generateWikiArticles(
     newContent = stripDeadLinks(newContent, validSlugSet);
 
     if (newContent !== page.content) {
-      await wikiService.updatePage(workspaceId, slug, { content: newContent });
+      await wikiService.updatePage(wikiId, slug, { content: newContent });
     }
   }
 
@@ -702,13 +702,13 @@ export async function generateWikiArticles(
   // =========================================================================
   console.log(`[wiki-gen] 📋 Schritt 6: Aktualisiere Index-Intro...`);
 
-  const indexPage = await wikiService.getPage(workspaceId, "index");
+  const indexPage = await wikiService.getPage(wikiId, "index");
   if (!indexPage || !indexPage.content) {
     // Index neu erstellen
-    const stats = await wikiService.getStats(workspaceId);
+    const stats = await wikiService.getStats(wikiId);
     const indexIntro = `# Wiki Index\n\nDieses Wiki enthält ${stats.total_pages} Seiten aus importierten Dokumenten.`;
     await wikiService.createPage({
-      workspace_id: workspaceId,
+      wiki_id: wikiId,
       slug: "index",
       title: "Wiki Index",
       content: indexIntro,
@@ -721,7 +721,7 @@ export async function generateWikiArticles(
   // auffindbar sind (nicht-blockierend – hält den Wiki-Gen-Response nicht auf).
   //
   // Mit WIKI_EMBED_AFTER_GENERATE=0 abschaltbar, und das ist bei Massenläufen
-  // zwingend: embedWorkspaceChunks arbeitet workspace-weit, nicht
+  // zwingend: embedWorkspaceChunks arbeitet wiki-weit, nicht
   // dokumentbezogen. Bei hunderten Aufrufen laufen entsprechend viele Sweeps
   // gleichzeitig über dieselben Zeilen (kein FOR UPDATE SKIP LOCKED), embedden
   // Chunks doppelt und belegen dabei den DB-Pool. Stattdessen einmal
@@ -729,20 +729,20 @@ export async function generateWikiArticles(
   if (process.env.WIKI_EMBED_AFTER_GENERATE !== "0") {
     import("./embedding.ts")
       .then(({ embedWorkspaceChunks }) =>
-        embedWorkspaceChunks(workspaceId).then((r) =>
+        embedWorkspaceChunks(wikiId).then((r) =>
           console.log(`[wiki-gen] 🧠 ${r.processed} Wiki-Chunks embedded`),
         ),
       )
       .catch((e) => console.warn(`[wiki-gen] Embedding-Trigger fehlgeschlagen:`, e));
   }
 
-  // Auto-Themen-Klassifikation (Ebene 1): nur wenn der Workspace Themen hat und
+  // Auto-Themen-Klassifikation (Ebene 1): nur wenn der Wiki Themen hat und
   // das Dokument noch keine zugeordneten (überschreibt keine Handedits). Robust –
   // Fehler brechen die Wiki-Generierung nie ab.
   try {
     const classifyText =
       summaryPage?.summary || summaryPage?.content || doc.title;
-    const topicIds = await topicService.classifyText(workspaceId, classifyText);
+    const topicIds = await topicService.classifyText(wikiId, classifyText);
     if (topicIds.length) {
       await topicService.assignAutoTopics(docId, topicIds);
       console.log(`[wiki-gen] 🏷️ ${topicIds.length} Themen zugeordnet`);
@@ -928,7 +928,7 @@ function sameTitle(a: string, b: string): boolean {
 
 /** Legt eine Wiki-Seite an oder aktualisiert sie, falls der Slug schon existiert. */
 async function upsertPage(
-  workspaceId: string,
+  wikiId: string,
   slug: string,
   data: {
     title: string;
@@ -940,9 +940,9 @@ async function upsertPage(
     sort_order?: number;
   },
 ) {
-  const existing = await wikiService.getPage(workspaceId, slug);
+  const existing = await wikiService.getPage(wikiId, slug);
   if (existing) {
-    const page = await wikiService.updatePage(workspaceId, slug, {
+    const page = await wikiService.updatePage(wikiId, slug, {
       title: data.title,
       content: data.content,
       summary: data.summary,
@@ -952,7 +952,7 @@ async function upsertPage(
     // deren Inhalt der Lock in updatePage bewusst unangetastet lässt.
     if (data.parent_slug !== undefined || data.sort_order !== undefined) {
       return (
-        (await wikiService.setPageHierarchy(workspaceId, slug, {
+        (await wikiService.setPageHierarchy(wikiId, slug, {
           parent_slug: data.parent_slug ?? null,
           sort_order: data.sort_order ?? 0,
         })) || page
@@ -961,7 +961,7 @@ async function upsertPage(
     return page;
   }
   return await wikiService.createPage({
-    workspace_id: workspaceId,
+    wiki_id: wikiId,
     slug,
     title: data.title,
     content: data.content,

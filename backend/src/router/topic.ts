@@ -1,15 +1,15 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { authMiddleware } from "../middleware/auth.ts";
-import { workspaceParamAccess } from "../middleware/workspace-access.ts";
+import { sessionMiddleware } from "../middleware/auth.ts";
+import { wikiParamAccess } from "../middleware/access.ts";
 import * as topicService from "../service/topic.ts";
 
 const topicRouter = new Hono();
-topicRouter.use("*", authMiddleware);
-// Alle Themen-Routen sind workspace-gebunden – GET = lesen, sonst schreiben.
-topicRouter.use("/:workspaceId", workspaceParamAccess());
-topicRouter.use("/:workspaceId/*", workspaceParamAccess());
+topicRouter.use("*", sessionMiddleware);
+// Alle Themen-Routen sind wiki-gebunden – GET = lesen, sonst schreiben.
+topicRouter.use("/:wikiId", wikiParamAccess());
+topicRouter.use("/:wikiId/*", wikiParamAccess());
 
 const createSchema = z.object({
   label: z.string().min(1).max(255),
@@ -35,17 +35,17 @@ const bulkSchema = z.object({
   ),
 });
 
-// Themen eines Workspace auflisten (mit doc_count)
-topicRouter.get("/:workspaceId", async (c) => {
-  const list = await topicService.listTopics(c.req.param("workspaceId"));
+// Themen eines Wiki auflisten (mit doc_count)
+topicRouter.get("/:wikiId", async (c) => {
+  const list = await topicService.listTopics(c.req.param("wikiId"));
   return c.json({ topics: list });
 });
 
 // LLM-Vorschläge (nicht persistiert)
-topicRouter.post("/:workspaceId/suggest", async (c) => {
+topicRouter.post("/:wikiId/suggest", async (c) => {
   try {
     const suggestions = await topicService.suggestTopics(
-      c.req.param("workspaceId"),
+      c.req.param("wikiId"),
     );
     return c.json({ suggestions });
   } catch (e: any) {
@@ -55,14 +55,14 @@ topicRouter.post("/:workspaceId/suggest", async (c) => {
 
 // Mehrere Themen auf einmal anlegen (Vorschläge übernehmen)
 topicRouter.post(
-  "/:workspaceId/bulk",
+  "/:wikiId/bulk",
   zValidator("json", bulkSchema),
   async (c) => {
-    const workspaceId = c.req.param("workspaceId");
+    const wikiId = c.req.param("wikiId");
     const { topics } = c.req.valid("json");
     const created = [];
     for (const t of topics) {
-      created.push(await topicService.createTopic(workspaceId, t));
+      created.push(await topicService.createTopic(wikiId, t));
     }
     return c.json({ topics: created }, 201);
   },
@@ -70,11 +70,11 @@ topicRouter.post(
 
 // Einzelnes Thema anlegen
 topicRouter.post(
-  "/:workspaceId",
+  "/:wikiId",
   zValidator("json", createSchema),
   async (c) => {
     const topic = await topicService.createTopic(
-      c.req.param("workspaceId"),
+      c.req.param("wikiId"),
       c.req.valid("json"),
     );
     return c.json({ topic }, 201);
@@ -83,7 +83,7 @@ topicRouter.post(
 
 // Thema bearbeiten
 topicRouter.patch(
-  "/:workspaceId/:topicId",
+  "/:wikiId/:topicId",
   zValidator("json", updateSchema),
   async (c) => {
     const topic = await topicService.updateTopic(
@@ -96,7 +96,7 @@ topicRouter.patch(
 );
 
 // Thema löschen (inkl. Zuordnungen)
-topicRouter.delete("/:workspaceId/:topicId", async (c) => {
+topicRouter.delete("/:wikiId/:topicId", async (c) => {
   await topicService.deleteTopic(c.req.param("topicId"));
   return c.json({ success: true });
 });

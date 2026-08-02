@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { authMiddleware } from "../middleware/auth.ts";
-import { assertWorkspaceAccess } from "../middleware/workspace-access.ts";
+import { sessionMiddleware } from "../middleware/auth.ts";
+import { requireWikiCapability } from "../middleware/access.ts";
 import { hybridSearch } from "../service/search.ts";
 import { db } from "../db/index.ts";
 import { chatSessions, chatMessages, modelProviders } from "../db/schema.ts";
@@ -11,18 +11,18 @@ import { streamText, createTextStreamResponse } from "ai";
 import { openai } from "@ai-sdk/openai";
 
 const chatRouter = new Hono();
-chatRouter.use("*", authMiddleware);
+chatRouter.use("*", sessionMiddleware);
 
 const chatSchema = z.object({
-  workspace_id: z.string().uuid().optional(),
+  wiki_id: z.string().uuid().optional(),
   message: z.string().min(1),
   session_id: z.string().uuid().optional(),
 });
 
 // Session helper
 async function getOrCreateSession(
-  userId: number,
-  workspaceId: string | undefined,
+  userId: string,
+  wikiId: string | undefined,
   message: string,
   sessionId: string | undefined,
 ) {
@@ -39,7 +39,7 @@ async function getOrCreateSession(
     .insert(chatSessions)
     .values({
       id: crypto.randomUUID(),
-      workspace_id: workspaceId || null,
+      wiki_id: wikiId || null,
       user_id: userId,
       title: message.slice(0, 80),
     })
@@ -94,7 +94,7 @@ async function getActiveProvider() {
   return providers[0] || null;
 }
 
-// System-Prompt bauen. Weiches Grounding: der Workspace-Kontext wird bevorzugt
+// System-Prompt bauen. Weiches Grounding: der Wiki-Kontext wird bevorzugt
 // genutzt, wenn er zur Frage passt – ansonsten antwortet das Modell mit seinem
 // eigenen Wissen, statt zu verweigern. (Frühere strikte Variante blockierte
 // Themen, die nicht in der Wissensdatenbank stehen.)
@@ -125,17 +125,17 @@ const CHAT_TOP_K = parseInt(process.env.CHAT_TOP_K || "12");
 
 // Nicht-streaming Chat-Nachricht senden (für History-Kompatibilität)
 chatRouter.post("/", zValidator("json", chatSchema), async (c) => {
-  const user = c.get("user");
-  const { workspace_id, message, session_id } = c.req.valid("json");
-  // Ohne workspace_id chattet der User über "Alle Workspaces" – dann greift
+  const principal = c.get("principal");
+  const { wiki_id, message, session_id } = c.req.valid("json");
+  // Ohne wiki_id chattet der User über "Alle Wikis" – dann greift
   // keine Suche und es gibt nichts zu prüfen.
-  if (workspace_id) {
-    await assertWorkspaceAccess(user, workspace_id, "read");
+  if (wiki_id) {
+    await requireWikiCapability(principal, wiki_id, "wiki.read");
   }
 
   const session = await getOrCreateSession(
-    user.id,
-    workspace_id,
+    principal.userId!,
+    wiki_id,
     message,
     session_id,
   );
@@ -153,8 +153,8 @@ chatRouter.post("/", zValidator("json", chatSchema), async (c) => {
 
   // RAG: Suche nach relevanten Chunks
   let searchResults: any[] = [];
-  if (workspace_id) {
-    searchResults = await hybridSearch(workspace_id, message, CHAT_TOP_K);
+  if (wiki_id) {
+    searchResults = await hybridSearch(wiki_id, message, CHAT_TOP_K);
   }
 
   const context = searchResults
@@ -203,15 +203,15 @@ chatRouter.post("/", zValidator("json", chatSchema), async (c) => {
 
 // Streaming Chat-Endpunkt (SSE)
 chatRouter.post("/stream", zValidator("json", chatSchema), async (c) => {
-  const user = c.get("user");
-  const { workspace_id, message, session_id } = c.req.valid("json");
-  if (workspace_id) {
-    await assertWorkspaceAccess(user, workspace_id, "read");
+  const principal = c.get("principal");
+  const { wiki_id, message, session_id } = c.req.valid("json");
+  if (wiki_id) {
+    await requireWikiCapability(principal, wiki_id, "wiki.read");
   }
 
   const session = await getOrCreateSession(
-    user.id,
-    workspace_id,
+    principal.userId!,
+    wiki_id,
     message,
     session_id,
   );
@@ -230,8 +230,8 @@ chatRouter.post("/stream", zValidator("json", chatSchema), async (c) => {
 
   // RAG: Suche nach relevanten Chunks
   let searchResults: any[] = [];
-  if (workspace_id) {
-    searchResults = await hybridSearch(workspace_id, message, CHAT_TOP_K);
+  if (wiki_id) {
+    searchResults = await hybridSearch(wiki_id, message, CHAT_TOP_K);
   }
 
   const context = searchResults
@@ -381,11 +381,11 @@ chatRouter.post("/stream", zValidator("json", chatSchema), async (c) => {
 
 // Sessions auflisten
 chatRouter.get("/sessions", async (c) => {
-  const user = c.get("user");
+  const principal = c.get("principal");
   const sessions = await db
     .select()
     .from(chatSessions)
-    .where(eq(chatSessions.user_id, user.id))
+    .where(eq(chatSessions.user_id, principal.userId!))
     .orderBy(desc(chatSessions.updated_at))
     .limit(50);
   return c.json({ sessions });
@@ -394,7 +394,7 @@ chatRouter.get("/sessions", async (c) => {
 // Messages einer Session. Nur eigene Sessions – sonst wären fremde Chats über
 // eine geratene Session-ID lesbar.
 chatRouter.get("/sessions/:id/messages", async (c) => {
-  const user = c.get("user");
+  const principal = c.get("principal");
   const id = c.req.param("id");
 
   const [session] = await db
@@ -403,7 +403,7 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
     .where(eq(chatSessions.id, id))
     .limit(1);
   if (!session) return c.json({ error: "Session not found" }, 404);
-  if (session.user_id !== user.id) return c.json({ error: "Forbidden" }, 403);
+  if (session.user_id !== principal.userId!) return c.json({ error: "Forbidden" }, 403);
 
   const msgs = await db
     .select()
@@ -415,7 +415,7 @@ chatRouter.get("/sessions/:id/messages", async (c) => {
 
 // Session löschen (inkl. Nachrichten). Nur eigene Sessions.
 chatRouter.delete("/sessions/:id", async (c) => {
-  const user = c.get("user");
+  const principal = c.get("principal");
   const id = c.req.param("id");
 
   const [session] = await db
@@ -425,7 +425,7 @@ chatRouter.delete("/sessions/:id", async (c) => {
     .limit(1);
 
   if (!session) return c.json({ error: "Session not found" }, 404);
-  if (session.user_id !== user.id) return c.json({ error: "Forbidden" }, 403);
+  if (session.user_id !== principal.userId!) return c.json({ error: "Forbidden" }, 403);
 
   // Erst Nachrichten (FK), dann Session.
   await db.delete(chatMessages).where(eq(chatMessages.session_id, id));

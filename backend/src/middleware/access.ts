@@ -61,6 +61,12 @@ function notFound(): HTTPException {
   });
 }
 
+function notFoundOrg(): HTTPException {
+  return new HTTPException(404, {
+    res: Response.json({ error: "Organisation nicht gefunden" }, { status: 404 }),
+  });
+}
+
 function forbidden(capability: Capability): HTTPException {
   return new HTTPException(403, {
     res: Response.json(
@@ -82,6 +88,59 @@ function capabilitiesForRole(role: string): {
     return { role: null, capabilities: new Set() };
   }
   return { role, capabilities: capabilitiesOf(role) };
+}
+
+export interface OrgAccess {
+  organizationId: string;
+  role: RoleName;
+  capabilities: ReadonlySet<string>;
+}
+
+/**
+ * Rechte auf **Organisationsebene** — für alles, was nicht an einem einzelnen
+ * Wiki hängt: ein Wiki anlegen (`wiki.create`), Mitglieder verwalten,
+ * Modell-Provider und Abrechnung (`settings.manage`, `billing.manage`).
+ *
+ * Anonym gibt es hier nichts: eine Organisation ist nie öffentlich, nur einzelne
+ * Wikis darin sind es.
+ */
+export async function resolveOrgAccess(
+  principal: Principal,
+  organizationId: string,
+): Promise<OrgAccess> {
+  if (!principal.userId) throw notFoundOrg();
+
+  const [orgMember] = await db
+    .select({ role: member.role })
+    .from(member)
+    .where(
+      and(
+        eq(member.organizationId, organizationId),
+        eq(member.userId, principal.userId),
+      ),
+    )
+    .limit(1);
+
+  if (!orgMember) throw notFoundOrg();
+
+  const resolved = capabilitiesForRole(orgMember.role);
+  if (!resolved.role) throw notFoundOrg();
+
+  return {
+    organizationId,
+    role: resolved.role,
+    capabilities: resolved.capabilities,
+  };
+}
+
+export async function requireOrgCapability(
+  principal: Principal,
+  organizationId: string,
+  capability: Capability,
+): Promise<OrgAccess> {
+  const access = await resolveOrgAccess(principal, organizationId);
+  if (!access.capabilities.has(capability)) throw forbidden(capability);
+  return access;
 }
 
 /**

@@ -1,11 +1,11 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { authMiddleware } from "../middleware/auth.ts";
+import { sessionMiddleware } from "../middleware/auth.ts";
 import {
-  assertWorkspaceAccess,
-  assertDocumentAccess,
-} from "../middleware/workspace-access.ts";
+  requireWikiCapability,
+  requireDocumentCapability,
+} from "../middleware/access.ts";
 import * as documentService from "../service/document.ts";
 import * as documentMove from "../service/document-move.ts";
 import {
@@ -18,30 +18,30 @@ import type { DocumentSort } from "../service/document.ts";
 import { logActivity, updateLog } from "../service/activity-log.ts";
 import * as topicService from "../service/topic.ts";
 import { db } from "../db/index.ts";
-import { workspaces } from "../db/schema.ts";
+import { wikis } from "../db/schema.ts";
 import { eq } from "drizzle-orm";
 
 const documentRouter = new Hono();
-documentRouter.use("*", authMiddleware);
+documentRouter.use("*", sessionMiddleware);
 
 const urlSchema = z.object({
-  workspace_id: z.string().uuid(),
+  wiki_id: z.string().uuid(),
   url: z.string().url(),
   title: z.string().optional(),
 });
 
-// Distinct-Kanäle eines Workspace (für das Kanal-Filter-Dropdown)
-documentRouter.get("/:workspaceId/channels", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
-  await assertWorkspaceAccess(c.get("user"), workspaceId, "read");
-  const channels = await documentService.listChannels(workspaceId);
+// Distinct-Kanäle eines Wiki (für das Kanal-Filter-Dropdown)
+documentRouter.get("/:wikiId/channels", async (c) => {
+  const wikiId = c.req.param("wikiId");
+  await requireWikiCapability(c.get("principal"), wikiId, "wiki.read");
+  const channels = await documentService.listChannels(wikiId);
   return c.json({ channels });
 });
 
-// Dokumente eines Workspace auflisten (mit Filter/Sortierung, Ebene 2)
-documentRouter.get("/:workspaceId", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
-  await assertWorkspaceAccess(c.get("user"), workspaceId, "read");
+// Dokumente eines Wiki auflisten (mit Filter/Sortierung, Ebene 2)
+documentRouter.get("/:wikiId", async (c) => {
+  const wikiId = c.req.param("wikiId");
+  await requireWikiCapability(c.get("principal"), wikiId, "wiki.read");
   const q = c.req.query();
   const parseDate = (v?: string) => {
     if (!v) return undefined;
@@ -56,7 +56,7 @@ documentRouter.get("/:workspaceId", async (c) => {
     "title_asc",
     "title_desc",
   ];
-  const list = await documentService.listDocuments(workspaceId, {
+  const list = await documentService.listDocuments(wikiId, {
     type: q.type || undefined,
     channel: q.channel || undefined,
     query: q.q || undefined,
@@ -72,7 +72,7 @@ documentRouter.get("/:workspaceId", async (c) => {
 
 // Themen eines Dokuments abrufen (topic_ids)
 documentRouter.get("/:id/topics", async (c) => {
-  await assertDocumentAccess(c.get("user"), c.req.param("id"), "read");
+  await requireDocumentCapability(c.get("principal"), c.req.param("id"), "wiki.read");
   const ids = await topicService.getDocumentTopicIds(c.req.param("id"));
   return c.json({ topic_ids: ids });
 });
@@ -83,7 +83,7 @@ documentRouter.patch(
   "/:id/topics",
   zValidator("json", docTopicsSchema),
   async (c) => {
-    await assertDocumentAccess(c.get("user"), c.req.param("id"), "write");
+    await requireDocumentCapability(c.get("principal"), c.req.param("id"), "wiki.write");
     const { topic_ids } = c.req.valid("json");
     await topicService.setDocumentTopics(c.req.param("id"), topic_ids);
     return c.json({ topic_ids });
@@ -93,17 +93,17 @@ documentRouter.patch(
 // Einzelnes Dokument abrufen
 documentRouter.get("/detail/:id", async (c) => {
   const id = c.req.param("id");
-  await assertDocumentAccess(c.get("user"), id, "read");
+  await requireDocumentCapability(c.get("principal"), id, "wiki.read");
   const doc = await documentService.getDocument(id);
   if (!doc) return c.json({ error: "Document not found" }, 404);
   return c.json({ document: doc });
 });
 
 // Datei-Upload
-documentRouter.post("/upload/:workspaceId", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
-  const user = c.get("user");
-  await assertWorkspaceAccess(user, workspaceId, "write");
+documentRouter.post("/upload/:wikiId", async (c) => {
+  const wikiId = c.req.param("wikiId");
+  const principal = c.get("principal");
+  await requireWikiCapability(principal, wikiId, "wiki.write");
 
   const body = await c.req.parseBody();
   const file = body["file"] as File | undefined;
@@ -130,12 +130,12 @@ documentRouter.post("/upload/:workspaceId", async (c) => {
   // Dokument in DB anlegen
   const doc = await documentService.createDocument({
     id: crypto.randomUUID(),
-    workspace_id: workspaceId,
+    wiki_id: wikiId,
     title: fileName,
     type: fileType,
     source: fileName,
     file_size: fileSize,
-    created_by: user.id,
+    created_by: principal.userId!,
   });
 
   // Datei-Bytes im Request-Kontext lesen (File ist nur hier gültig),
@@ -144,8 +144,8 @@ documentRouter.post("/upload/:workspaceId", async (c) => {
   setTimeout(() => {
     processUploadedFile(
       doc.id,
-      workspaceId,
-      user.id,
+      wikiId,
+      principal.userId!,
       fileName,
       fileType,
       buffer,
@@ -163,8 +163,8 @@ documentRouter.post("/upload/:workspaceId", async (c) => {
  */
 async function processUploadedFile(
   docId: string,
-  workspaceId: string,
-  userId: number,
+  wikiId: string,
+  userId: string,
   fileName: string,
   fileType: string,
   buffer: ArrayBuffer,
@@ -175,7 +175,7 @@ async function processUploadedFile(
     status: "started",
     message: `Verarbeite Datei: ${fileName}`,
     details: { fileName, fileType },
-    workspace_id: workspaceId,
+    wiki_id: wikiId,
     document_id: docId,
     user_id: userId,
   });
@@ -226,7 +226,7 @@ async function processUploadedFile(
 
     // Content speichern (Wiki-Generierung liest doc.content) + chunken
     await documentService.updateDocumentContent(docId, text);
-    await scheduleChunking(docId, workspaceId, text);
+    await scheduleChunking(docId, wikiId, text);
 
     await updateLog(logId, {
       status: "completed",
@@ -236,7 +236,7 @@ async function processUploadedFile(
     });
 
     // Wiki-Artikel asynchron generieren
-    setTimeout(() => scheduleWikiGeneration(docId, workspaceId, userId), 1000);
+    setTimeout(() => scheduleWikiGeneration(docId, wikiId, userId), 1000);
   } catch (e: any) {
     console.error(`[doc] Datei-Verarbeitung fehlgeschlagen ${docId}:`, e.message);
     try {
@@ -252,23 +252,23 @@ async function processUploadedFile(
 
 // URL importieren
 documentRouter.post("/import-url", zValidator("json", urlSchema), async (c) => {
-  const user = c.get("user");
-  const { workspace_id, url, title } = c.req.valid("json");
-  await assertWorkspaceAccess(user, workspace_id, "write");
+  const principal = c.get("principal");
+  const { wiki_id, url, title } = c.req.valid("json");
+  await requireWikiCapability(principal, wiki_id, "wiki.write");
 
   const doc = await documentService.createDocument({
     id: crypto.randomUUID(),
-    workspace_id,
+    wiki_id,
     title: title || url,
     type: "url",
     source: url,
     source_url: url,
-    created_by: user.id,
+    created_by: principal.userId!,
   });
 
   // Asynchron URL laden (entkoppelt vom Request-Kontext)
   setTimeout(() => {
-    fetchAndParseUrl(doc.id, url, workspace_id, user.id).catch((e: any) =>
+    fetchAndParseUrl(doc.id, url, wiki_id, principal.userId!).catch((e: any) =>
       console.error(`[doc] URL-Import fehlgeschlagen:`, e.message),
     );
   }, 100);
@@ -278,7 +278,7 @@ documentRouter.post("/import-url", zValidator("json", urlSchema), async (c) => {
 
 // YouTube-Video importieren
 const youTubeSchema = z.object({
-  workspace_id: z.string().uuid(),
+  wiki_id: z.string().uuid(),
   url: z.string(),
 });
 
@@ -286,15 +286,15 @@ documentRouter.post(
   "/import-youtube",
   zValidator("json", youTubeSchema),
   async (c) => {
-    const user = c.get("user");
-    const { workspace_id, url } = c.req.valid("json");
-    await assertWorkspaceAccess(user, workspace_id, "write");
+    const principal = c.get("principal");
+    const { wiki_id, url } = c.req.valid("json");
+    await requireWikiCapability(principal, wiki_id, "wiki.write");
 
     const t0 = Date.now();
     console.log(`[doc] ========== YouTube-Import gestartet ==========`);
     console.log(`[doc] URL: ${url}`);
-    console.log(`[doc] Workspace: ${workspace_id}`);
-    console.log(`[doc] User: ${user.id} (${user.email})`);
+    console.log(`[doc] Wiki: ${wiki_id}`);
+    console.log(`[doc] User: ${principal.userId!} (${principal.email})`);
 
     const videoId = extractVideoId(url);
     if (!videoId) {
@@ -308,8 +308,8 @@ documentRouter.post(
       status: "started",
       message: `Importiere YouTube-Video: ${url}`,
       details: { url, videoId },
-      workspace_id,
-      user_id: user.id,
+      wiki_id,
+      user_id: principal.userId!,
     });
 
     console.log(`[doc] Rufe YouTube-Info ab (fetchYouTubeInfo)...`);
@@ -338,7 +338,7 @@ documentRouter.post(
     const meta = buildDocumentMetadata(info);
     const doc = await documentService.createDocument({
       id: crypto.randomUUID(),
-      workspace_id,
+      wiki_id,
       title: info.title,
       type: "youtube",
       source: url,
@@ -348,7 +348,7 @@ documentRouter.post(
       published_at: meta.published_at,
       duration: meta.duration,
       source_metadata: meta.source_metadata,
-      created_by: user.id,
+      created_by: principal.userId!,
     });
     console.log(`[doc] ✅ Dokument erstellt: ${doc.id}`);
 
@@ -367,14 +367,14 @@ documentRouter.post(
     // Chunking starten (async – entkoppelt vom Request-Kontext)
     console.log(`[doc] Starte Chunking für ${doc.id}...`);
     setTimeout(() => {
-      scheduleChunking(doc.id, workspace_id, content).catch((e: any) =>
+      scheduleChunking(doc.id, wiki_id, content).catch((e: any) =>
         console.error(`[doc] Chunking fehlgeschlagen:`, e.message),
       );
     }, 100);
 
     // Wiki-Artikel asynchron generieren
     setTimeout(
-      () => scheduleWikiGeneration(doc.id, workspace_id, user.id),
+      () => scheduleWikiGeneration(doc.id, wiki_id, principal.userId!),
       1000,
     );
 
@@ -390,7 +390,7 @@ documentRouter.post(
 // oder um veraltete Metadaten zu aktualisieren. Content/Transkript bleibt.
 documentRouter.post("/:id/refresh-metadata", async (c) => {
   const id = c.req.param("id");
-  await assertDocumentAccess(c.get("user"), id, "write");
+  await requireDocumentCapability(c.get("principal"), id, "wiki.write");
   const doc = await documentService.getDocument(id);
   if (!doc) return c.json({ error: "Document not found" }, 404);
   if (doc.type !== "youtube") {
@@ -421,35 +421,35 @@ documentRouter.post("/:id/refresh-metadata", async (c) => {
 });
 
 // Vorschau: was würde ein Verschieben bewirken? Verlangt Schreibrecht in Quelle
-// UND Ziel – verschieben heißt in beiden Workspaces ändern.
+// UND Ziel – verschieben heißt in beiden Wikis ändern.
 documentRouter.get("/:id/move-preview", async (c) => {
-  const user = c.get("user");
+  const principal = c.get("principal");
   const id = c.req.param("id");
   const target = c.req.query("target");
   if (!target) return c.json({ error: "target is required" }, 400);
 
-  await assertDocumentAccess(user, id, "write");
-  await assertWorkspaceAccess(user, target, "write");
+  await requireDocumentCapability(principal, id, "wiki.write");
+  await requireWikiCapability(principal, target, "wiki.write");
 
   const preview = await documentMove.previewMove(id, target);
   if ("error" in preview) return c.json(preview, 400);
   return c.json({ preview });
 });
 
-// Dokument samt zugehöriger Wiki-Artikel in einen anderen Workspace verschieben
+// Dokument samt zugehöriger Wiki-Artikel in einen anderen Wiki verschieben
 documentRouter.post(
   "/:id/move",
-  zValidator("json", z.object({ target_workspace_id: z.string().uuid() })),
+  zValidator("json", z.object({ target_wiki_id: z.string().uuid() })),
   async (c) => {
-    const user = c.get("user");
+    const principal = c.get("principal");
     const id = c.req.param("id");
-    const { target_workspace_id } = c.req.valid("json");
+    const { target_wiki_id } = c.req.valid("json");
 
-    await assertDocumentAccess(user, id, "write");
-    await assertWorkspaceAccess(user, target_workspace_id, "write");
+    await requireDocumentCapability(principal, id, "wiki.write");
+    await requireWikiCapability(principal, target_wiki_id, "wiki.write");
 
     try {
-      const result = await documentMove.moveDocument(id, target_workspace_id);
+      const result = await documentMove.moveDocument(id, target_wiki_id);
       return c.json(result);
     } catch (e: any) {
       console.error("[doc] Verschieben fehlgeschlagen:", e);
@@ -461,7 +461,7 @@ documentRouter.post(
 // Dokument löschen
 documentRouter.delete("/:id", async (c) => {
   const id = c.req.param("id");
-  await assertDocumentAccess(c.get("user"), id, "write");
+  await requireDocumentCapability(c.get("principal"), id, "wiki.write");
   await documentService.deleteDocument(id);
   return c.json({ success: true });
 });
@@ -470,7 +470,7 @@ documentRouter.delete("/:id", async (c) => {
 
 async function scheduleChunking(
   docId: string,
-  workspaceId: string,
+  wikiId: string,
   text: string,
 ) {
   try {
@@ -485,18 +485,18 @@ async function scheduleChunking(
       return;
     }
 
-    // Chunkgröße aus dem Workspace übernehmen. Vorher wurde splitIntoChunks
-    // ohne Argumente aufgerufen, wodurch workspaces.chunk_size/chunk_overlap
-    // für Dokumente wirkungslos waren (immer 512/50) – in einem Workspace mit
+    // Chunkgröße aus dem Wiki übernehmen. Vorher wurde splitIntoChunks
+    // ohne Argumente aufgerufen, wodurch wikis.chunk_size/chunk_overlap
+    // für Dokumente wirkungslos waren (immer 512/50) – in einem Wiki mit
     // größer gechunkten Dokumenten hätte ein UI-Upload sonst eine abweichende
     // Chunk-Größe und damit einen inkonsistenten Vektorindex.
     const [ws] = await db
       .select({
-        chunk_size: workspaces.chunk_size,
-        chunk_overlap: workspaces.chunk_overlap,
+        chunk_size: wikis.chunk_size,
+        chunk_overlap: wikis.chunk_overlap,
       })
-      .from(workspaces)
-      .where(eq(workspaces.id, workspaceId))
+      .from(wikis)
+      .where(eq(wikis.id, wikiId))
       .limit(1);
 
     const chunkList = documentService.splitIntoChunks(
@@ -505,7 +505,7 @@ async function scheduleChunking(
       ws?.chunk_overlap ?? 50,
     );
     if (chunkList.length > 0) {
-      await documentService.saveChunks(docId, workspaceId, chunkList);
+      await documentService.saveChunks(docId, wikiId, chunkList);
     }
 
     await documentService.updateDocumentStatus(
@@ -519,7 +519,7 @@ async function scheduleChunking(
     // Embedding im Hintergrund starten (nicht-blockierend)
     try {
       const { embedWorkspaceChunks } = await import("../service/embedding.ts");
-      embedWorkspaceChunks(workspaceId).then((r) =>
+      embedWorkspaceChunks(wikiId).then((r) =>
         console.log(`[doc] Embedded ${r.processed} chunks for doc ${docId}`),
       );
     } catch (e: any) {
@@ -536,8 +536,8 @@ async function scheduleChunking(
 /** Wiki-Artikel asynchron generieren (Blockiert nicht den HTTP-Response) */
 async function scheduleWikiGeneration(
   docId: string,
-  workspaceId: string,
-  userId: number,
+  wikiId: string,
+  userId: string,
 ) {
   const t0 = Date.now();
   const logId = await logActivity({
@@ -545,7 +545,7 @@ async function scheduleWikiGeneration(
     status: "started",
     message: `Generiere Wiki-Artikel aus Dokument ${docId.slice(0, 8)}...`,
     details: { document_id: docId },
-    workspace_id: workspaceId,
+    wiki_id: wikiId,
     document_id: docId,
     user_id: userId,
   });
@@ -557,7 +557,7 @@ async function scheduleWikiGeneration(
     const { generateWikiArticles } =
       await import("../service/wiki-generate.ts");
 
-    const result = await generateWikiArticles(docId, workspaceId);
+    const result = await generateWikiArticles(docId, wikiId);
 
     if (result) {
       await updateLog(logId, {
@@ -601,8 +601,8 @@ async function scheduleWikiGeneration(
 async function fetchAndParseUrl(
   docId: string,
   url: string,
-  workspaceId: string,
-  userId: number,
+  wikiId: string,
+  userId: string,
 ) {
   const t0 = Date.now();
   const logId = await logActivity({
@@ -610,7 +610,7 @@ async function fetchAndParseUrl(
     status: "started",
     message: `Importiere URL: ${url}`,
     details: { url },
-    workspace_id: workspaceId,
+    wiki_id: wikiId,
     document_id: docId,
     user_id: userId,
   });
@@ -669,7 +669,7 @@ async function fetchAndParseUrl(
 
     // Content speichern (Wiki-Generierung liest doc.content) + chunken
     await documentService.updateDocumentContent(docId, text);
-    await scheduleChunking(docId, workspaceId, text);
+    await scheduleChunking(docId, wikiId, text);
 
     await updateLog(logId, {
       status: "completed",
@@ -679,7 +679,7 @@ async function fetchAndParseUrl(
     });
 
     // Wiki-Artikel asynchron generieren
-    setTimeout(() => scheduleWikiGeneration(docId, workspaceId, userId), 1000);
+    setTimeout(() => scheduleWikiGeneration(docId, wikiId, userId), 1000);
   } catch (e: any) {
     console.error(`[doc] URL-Import fehlgeschlagen ${docId}:`, e.message);
     try {

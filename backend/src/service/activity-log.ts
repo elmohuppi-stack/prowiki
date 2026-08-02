@@ -12,9 +12,9 @@ export interface LogEntry {
   status?: "started" | "completed" | "failed";
   message?: string;
   details?: Record<string, unknown>;
-  workspace_id?: string;
+  wiki_id?: string;
   document_id?: string;
-  user_id?: number;
+  user_id?: string;
 }
 
 /**
@@ -30,7 +30,7 @@ export async function logActivity(entry: LogEntry): Promise<string> {
       status: entry.status || "started",
       message: entry.message || "",
       details: (entry.details as Record<string, unknown>) || {},
-      workspace_id: entry.workspace_id || null,
+      wiki_id: entry.wiki_id || null,
       document_id: entry.document_id || null,
       user_id: entry.user_id || null,
       created_at: new Date(),
@@ -97,7 +97,7 @@ export async function getChatWikiStatus(
 export async function getLogs(options: {
   action?: string;
   status?: string;
-  workspace_id?: string;
+  wiki_id?: string;
   document_id?: string;
   limit?: number;
   offset?: number;
@@ -119,10 +119,10 @@ export async function getLogs(options: {
       eq(activityLogs.status, options.status),
     ) as any;
   }
-  if (options.workspace_id) {
+  if (options.wiki_id) {
     conditions = and(
       conditions,
-      eq(activityLogs.workspace_id, options.workspace_id),
+      eq(activityLogs.wiki_id, options.wiki_id),
     ) as any;
   }
   if (options.document_id) {

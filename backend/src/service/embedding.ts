@@ -168,7 +168,7 @@ export async function embedChunk(chunkId: string, content: string) {
 // 200 ms Sleep). Über EMBED_BATCH_SIZE konfigurierbar.
 const EMBED_BATCH_SIZE = parseInt(process.env.EMBED_BATCH_SIZE || "32");
 
-// Alle unembedded Chunks eines Workspace verarbeiten – ohne oberes Limit, damit auch
+// Alle unembedded Chunks eines Wiki verarbeiten – ohne oberes Limit, damit auch
 // sehr große Dokumente (>5000 Chunks) vollständig embedded werden. Früher deckelte eine
 // feste Batch-Zahl bei 5000 Chunks, wodurch der Rest still ohne Embedding blieb und nie
 // in der Vektorsuche auftauchte.
@@ -176,7 +176,7 @@ const EMBED_BATCH_SIZE = parseInt(process.env.EMBED_BATCH_SIZE || "32");
 // Endlosschleifen-Schutz: Chunks, deren Embedding dauerhaft fehlschlägt, bleiben `null`
 // und würden vom isNull-Filter sonst ewig erneut geladen. Sie werden in `failed` gemerkt
 // und aus der Abfrage ausgeschlossen.
-export async function embedWorkspaceChunks(workspaceId: string) {
+export async function embedWorkspaceChunks(wikiId: string) {
   const provider = await getActiveEmbeddingProvider();
   if (!provider) {
     console.warn("[embed] No active embedding provider configured");
@@ -189,7 +189,7 @@ export async function embedWorkspaceChunks(workspaceId: string) {
 
   while (true) {
     const conditions = [
-      eq(chunks.workspace_id, workspaceId),
+      eq(chunks.wiki_id, wikiId),
       isNull(chunks.embedding),
     ];
     if (failed.size > 0) {
@@ -226,7 +226,7 @@ export async function embedWorkspaceChunks(workspaceId: string) {
 
   if (total > 0) {
     console.log(
-      `[embed] Embedded ${processed}/${total} chunks in workspace ${workspaceId}` +
+      `[embed] Embedded ${processed}/${total} chunks in wiki ${wikiId}` +
         (failed.size > 0 ? ` (${failed.size} fehlgeschlagen)` : ""),
     );
   }

@@ -1,17 +1,17 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { authMiddleware } from "../middleware/auth.ts";
-import { workspaceParamAccess } from "../middleware/workspace-access.ts";
+import { sessionMiddleware } from "../middleware/auth.ts";
+import { wikiParamAccess } from "../middleware/access.ts";
 import * as wikiService from "../service/wiki.ts";
 import * as chatWiki from "../service/wiki-from-chat.ts";
 import * as activityLog from "../service/activity-log.ts";
 
-const wikiRouter = new Hono();
-wikiRouter.use("*", authMiddleware);
-// Alle Wiki-Routen liegen unter /:workspaceId/… – GET = lesen, alles andere
+const pageRouter = new Hono();
+pageRouter.use("*", sessionMiddleware);
+// Alle Wiki-Routen liegen unter /:wikiId/… – GET = lesen, alles andere
 // schreiben.
-wikiRouter.use("/:workspaceId/*", workspaceParamAccess());
+pageRouter.use("/:wikiId/*", wikiParamAccess());
 
 const createSchema = z.object({
   slug: z.string().min(1).max(255),
@@ -41,9 +41,9 @@ const WIKI_SORTS = [
 ] as const;
 type WikiSortT = (typeof WIKI_SORTS)[number];
 
-// Wiki-Seiten eines Workspace auflisten (mit Filter/Sortierung, Ebene 2)
-wikiRouter.get("/:workspaceId/pages", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
+// Wiki-Seiten eines Wiki auflisten (mit Filter/Sortierung, Ebene 2)
+pageRouter.get("/:wikiId/pages", async (c) => {
+  const wikiId = c.req.param("wikiId");
   const q = c.req.query();
   const parseDate = (v?: string) => {
     if (!v) return undefined;
@@ -51,7 +51,7 @@ wikiRouter.get("/:workspaceId/pages", async (c) => {
     return isNaN(d.getTime()) ? undefined : d;
   };
 
-  const result = await wikiService.listPages(workspaceId, {
+  const result = await wikiService.listPages(wikiId, {
     page_type: q.page_type || undefined,
     // Standardmäßig nur veröffentlichte Seiten; Entwürfe (Chat-Verbund) bleiben
     // dem Review-Endpoint vorbehalten. Explizites ?status=… überschreibt das.
@@ -81,10 +81,10 @@ wikiRouter.get("/:workspaceId/pages", async (c) => {
  * gibt es keinen Weg, einen Zeitraum anzusteuern – der Datumsfilter allein
  * verlangt, dass man den gesuchten Zeitraum schon kennt.
  */
-wikiRouter.get("/:workspaceId/facets/months", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
+pageRouter.get("/:wikiId/facets/months", async (c) => {
+  const wikiId = c.req.param("wikiId");
   const q = c.req.query();
-  const months = await wikiService.monthFacets(workspaceId, {
+  const months = await wikiService.monthFacets(wikiId, {
     page_type: q.page_type || undefined,
     channel: q.channel || undefined,
   });
@@ -92,16 +92,16 @@ wikiRouter.get("/:workspaceId/facets/months", async (c) => {
 });
 
 /** Auffälligkeiten: Treffer je Marker aus page_metadata.flags. */
-wikiRouter.get("/:workspaceId/facets/flags", async (c) => {
-  const flags = await wikiService.flagFacets(c.req.param("workspaceId"));
+pageRouter.get("/:wikiId/facets/flags", async (c) => {
+  const flags = await wikiService.flagFacets(c.req.param("wikiId"));
   return c.json({ flags });
 });
 
 // Graph-Daten (Fokus-Subgraph oder Top-Konzepte-Wolke)
-wikiRouter.get("/:workspaceId/graph", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
+pageRouter.get("/:wikiId/graph", async (c) => {
+  const wikiId = c.req.param("wikiId");
   const q = c.req.query();
-  const graph = await wikiService.getGraph(workspaceId, {
+  const graph = await wikiService.getGraph(wikiId, {
     focus: q.focus || undefined,
     types: q.types ? q.types.split(",").filter(Boolean) : undefined,
     limit: q.limit ? parseInt(q.limit) : undefined,
@@ -110,10 +110,10 @@ wikiRouter.get("/:workspaceId/graph", async (c) => {
 });
 
 // Ebene 3: meistverlinkte Konzepte (Backlink-Einstiegspunkte)
-wikiRouter.get("/:workspaceId/concepts/top", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
+pageRouter.get("/:wikiId/concepts/top", async (c) => {
+  const wikiId = c.req.param("wikiId");
   const limit = parseInt(c.req.query("limit") || "20");
-  const concepts = await wikiService.topConcepts(workspaceId, limit);
+  const concepts = await wikiService.topConcepts(wikiId, limit);
   return c.json({ concepts });
 });
 
@@ -132,22 +132,22 @@ const fromChatSchema = z.object({
 
 // Verbund aus einem Gespräch erzeugen (asynchron). Ersetzt vorhandene, noch
 // nicht veröffentlichte Entwürfe derselben Session ("Regenerieren = ersetzen").
-wikiRouter.post(
-  "/:workspaceId/from-chat",
+pageRouter.post(
+  "/:wikiId/from-chat",
   zValidator("json", fromChatSchema),
   async (c) => {
-    const workspaceId = c.req.param("workspaceId");
-    const user = c.get("user");
+    const wikiId = c.req.param("wikiId");
+    const principal = c.get("principal");
     const data = c.req.valid("json");
 
-    await wikiService.deleteSessionDrafts(workspaceId, data.session_id);
+    await wikiService.deleteSessionDrafts(wikiId, data.session_id);
 
     const clusterId = crypto.randomUUID();
     // Fire-and-forget; Fortschritt via Activity-Log, Ergebnis via /drafts-Poll.
     setTimeout(() => {
       chatWiki
         .generateClusterFromChat({
-          workspaceId,
+          wikiId,
           sessionId: data.session_id,
           clusterId,
           spec: {
@@ -159,7 +159,7 @@ wikiRouter.post(
             max_entities: data.max_entities,
             use_rag: data.use_rag,
           },
-          userId: user?.id,
+          userId: principal.userId ?? undefined,
         })
         .catch((e: any) =>
           console.error(`[chat-wiki] Generierung fehlgeschlagen:`, e.message),
@@ -170,72 +170,72 @@ wikiRouter.post(
   },
 );
 
-// Offene Entwurfs-Verbünde eines Workspace (Hinweis im Wiki-Browser).
-wikiRouter.get("/:workspaceId/draft-clusters", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
-  const clusters = await wikiService.listDraftClusters(workspaceId);
+// Offene Entwurfs-Verbünde eines Wiki (Hinweis im Wiki-Browser).
+pageRouter.get("/:wikiId/draft-clusters", async (c) => {
+  const wikiId = c.req.param("wikiId");
+  const clusters = await wikiService.listDraftClusters(wikiId);
   return c.json({ clusters });
 });
 
 // Entwurfsseiten eines Verbunds abrufen (Review/Polling) inkl. Generierungs-Status.
-wikiRouter.get("/:workspaceId/clusters/:clusterId/pages", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
+pageRouter.get("/:wikiId/clusters/:clusterId/pages", async (c) => {
+  const wikiId = c.req.param("wikiId");
   const clusterId = c.req.param("clusterId");
   const [pages, status] = await Promise.all([
-    wikiService.listClusterDrafts(workspaceId, clusterId),
+    wikiService.listClusterDrafts(wikiId, clusterId),
     activityLog.getChatWikiStatus(clusterId),
   ]);
   return c.json({ pages, status });
 });
 
 // Verbund veröffentlichen (alle Entwürfe → published).
-wikiRouter.post("/:workspaceId/clusters/:clusterId/publish", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
+pageRouter.post("/:wikiId/clusters/:clusterId/publish", async (c) => {
+  const wikiId = c.req.param("wikiId");
   const clusterId = c.req.param("clusterId");
-  const count = await wikiService.publishCluster(workspaceId, clusterId);
+  const count = await wikiService.publishCluster(wikiId, clusterId);
   return c.json({ published: count });
 });
 
 // Einzelne Wiki-Seite abrufen (per Slug)
-wikiRouter.get("/:workspaceId/pages/:slug", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
+pageRouter.get("/:wikiId/pages/:slug", async (c) => {
+  const wikiId = c.req.param("wikiId");
   const slug = decodeURIComponent(c.req.param("slug"));
-  const page = await wikiService.getPage(workspaceId, slug);
+  const page = await wikiService.getPage(wikiId, slug);
   if (!page) return c.json({ error: "Page not found" }, 404);
   return c.json({ page });
 });
 
 // Wiki-Seite erstellen
-wikiRouter.post(
-  "/:workspaceId/pages",
+pageRouter.post(
+  "/:wikiId/pages",
   zValidator("json", createSchema),
   async (c) => {
-    const workspaceId = c.req.param("workspaceId");
-    const user = c.get("user");
+    const wikiId = c.req.param("wikiId");
+    const principal = c.get("principal");
     const data = c.req.valid("json");
 
     // Prüfen ob Slug bereits existiert
-    const existing = await wikiService.getPage(workspaceId, data.slug);
+    const existing = await wikiService.getPage(wikiId, data.slug);
     if (existing) {
       return c.json({ error: "Slug already exists" }, 409);
     }
 
     const page = await wikiService.createPage({
       ...data,
-      workspace_id: workspaceId,
-      created_by: user.id,
+      wiki_id: wikiId,
+      created_by: principal.userId!,
     });
 
     // Links auflösen
     if (page.content) {
       const { out_links } = await wikiService.resolveLinks(
-        workspaceId,
+        wikiId,
         page.content,
       );
       if (out_links.length > 0) {
-        await wikiService.updatePage(workspaceId, page.slug, { out_links });
+        await wikiService.updatePage(wikiId, page.slug, { out_links });
         await wikiService.updateIncomingLinks(
-          workspaceId,
+          wikiId,
           page.slug,
           out_links,
         );
@@ -247,30 +247,30 @@ wikiRouter.post(
 );
 
 // Wiki-Seite aktualisieren
-wikiRouter.put(
-  "/:workspaceId/pages/:slug",
+pageRouter.put(
+  "/:wikiId/pages/:slug",
   zValidator("json", updateSchema),
   async (c) => {
-    const workspaceId = c.req.param("workspaceId");
+    const wikiId = c.req.param("wikiId");
     const slug = decodeURIComponent(c.req.param("slug"));
     const data = c.req.valid("json");
-    const user = c.get("user");
+    const principal = c.get("principal");
     // Manueller Edit (Ebene 4): Snapshot + Lock setzen.
-    const opts = { manual: true, editedBy: user?.id };
+    const opts = { manual: true, editedBy: principal.userId ?? undefined };
 
-    const page = await wikiService.updatePage(workspaceId, slug, data, opts);
+    const page = await wikiService.updatePage(wikiId, slug, data, opts);
     if (!page) return c.json({ error: "Page not found" }, 404);
 
     // Bei Content-Änderung: Links neu auflösen (ebenfalls als manual, sonst
     // blockt der frisch gesetzte Lock das out_links-Update).
     if (data.content) {
       const { out_links } = await wikiService.resolveLinks(
-        workspaceId,
+        wikiId,
         data.content,
       );
       if (out_links.length > 0) {
-        await wikiService.updatePage(workspaceId, slug, { out_links }, opts);
-        await wikiService.updateIncomingLinks(workspaceId, slug, out_links);
+        await wikiService.updatePage(wikiId, slug, { out_links }, opts);
+        await wikiService.updateIncomingLinks(wikiId, slug, out_links);
       }
     }
 
@@ -279,26 +279,26 @@ wikiRouter.put(
 );
 
 // Ebene 4: Versionshistorie einer Seite
-wikiRouter.get("/:workspaceId/pages/:slug/revisions", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
+pageRouter.get("/:wikiId/pages/:slug/revisions", async (c) => {
+  const wikiId = c.req.param("wikiId");
   const slug = decodeURIComponent(c.req.param("slug"));
-  const revisions = await wikiService.listRevisions(workspaceId, slug);
+  const revisions = await wikiService.listRevisions(wikiId, slug);
   return c.json({ revisions });
 });
 
 // Ebene 4: frühere Fassung wiederherstellen
-wikiRouter.post(
-  "/:workspaceId/pages/:slug/revisions/:revId/restore",
+pageRouter.post(
+  "/:wikiId/pages/:slug/revisions/:revId/restore",
   async (c) => {
-    const workspaceId = c.req.param("workspaceId");
+    const wikiId = c.req.param("wikiId");
     const slug = decodeURIComponent(c.req.param("slug"));
     const revId = parseInt(c.req.param("revId"));
-    const user = c.get("user");
+    const principal = c.get("principal");
     const page = await wikiService.restoreRevision(
-      workspaceId,
+      wikiId,
       slug,
       revId,
-      user?.id,
+      principal.userId ?? undefined,
     );
     if (!page) return c.json({ error: "Revision not found" }, 404);
     return c.json({ page });
@@ -306,22 +306,22 @@ wikiRouter.post(
 );
 
 // Wiki-Seite löschen
-wikiRouter.delete("/:workspaceId/pages/:slug", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
+pageRouter.delete("/:wikiId/pages/:slug", async (c) => {
+  const wikiId = c.req.param("wikiId");
   const slug = decodeURIComponent(c.req.param("slug"));
-  await wikiService.deletePage(workspaceId, slug);
+  await wikiService.deletePage(wikiId, slug);
   return c.json({ success: true });
 });
 
 // Wiki-Seite aus Dokument generieren (neue Pipeline)
-wikiRouter.post("/:workspaceId/generate/:documentId", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
+pageRouter.post("/:wikiId/generate/:documentId", async (c) => {
+  const wikiId = c.req.param("wikiId");
   const documentId = c.req.param("documentId");
 
   try {
     const { generateWikiArticles } =
       await import("../service/wiki-generate.ts");
-    const result = await generateWikiArticles(documentId, workspaceId);
+    const result = await generateWikiArticles(documentId, wikiId);
 
     if (!result) {
       return c.json(
@@ -348,15 +348,15 @@ wikiRouter.post("/:workspaceId/generate/:documentId", async (c) => {
 });
 
 // Wiki-Statistiken
-wikiRouter.get("/:workspaceId/stats", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
-  const stats = await wikiService.getStats(workspaceId);
+pageRouter.get("/:wikiId/stats", async (c) => {
+  const wikiId = c.req.param("wikiId");
+  const stats = await wikiService.getStats(wikiId);
   return c.json(stats);
 });
 
 // Strukturierte Index-Ansicht (Intro + getypte Paginierung)
-wikiRouter.get("/:workspaceId/index", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
+pageRouter.get("/:wikiId/index", async (c) => {
+  const wikiId = c.req.param("wikiId");
   const types = c.req.query("types")?.split(",") || [
     "summary",
     "entity",
@@ -366,12 +366,12 @@ wikiRouter.get("/:workspaceId/index", async (c) => {
   const cursor = c.req.query("cursor") || "";
 
   // Index-Seite (Intro) laden
-  const indexPage = await wikiService.getPage(workspaceId, "index");
+  const indexPage = await wikiService.getPage(wikiId, "index");
 
   // Pro Type die ersten Seiten laden
   const groups: Record<string, { total: number; pages: any[] }> = {};
   for (const type of types) {
-    const result = await wikiService.listPages(workspaceId, {
+    const result = await wikiService.listPages(wikiId, {
       page_type: type,
       page_size: limit,
       page: 1,
@@ -387,13 +387,13 @@ wikiRouter.get("/:workspaceId/index", async (c) => {
 });
 
 // Seiten nach Typ (paginierte Liste für Tab-Bar)
-wikiRouter.get("/:workspaceId/pages-by-type", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
+pageRouter.get("/:wikiId/pages-by-type", async (c) => {
+  const wikiId = c.req.param("wikiId");
   const type = c.req.query("type") || "";
   const page = parseInt(c.req.query("page") || "1");
   const pageSize = parseInt(c.req.query("page_size") || "50");
 
-  const result = await wikiService.listPages(workspaceId, {
+  const result = await wikiService.listPages(wikiId, {
     page_type: type || undefined,
     page,
     page_size: pageSize,
@@ -402,58 +402,13 @@ wikiRouter.get("/:workspaceId/pages-by-type", async (c) => {
   return c.json(result);
 });
 
-// WeKnora Import – mehrere Wiki-Seiten auf einmal importieren
-const importSchema = z.object({
-  pages: z.array(
-    z.object({
-      slug: z.string().optional(),
-      title: z.string().min(1),
-      summary: z.string().optional(),
-      content: z.string().optional(),
-      page_type: z.string().optional(),
-      status: z.string().optional(),
-      out_links: z.array(z.string()).optional(),
-      in_links: z.array(z.string()).optional(),
-      aliases: z.array(z.string()).optional(),
-      source_refs: z.array(z.string()).optional(),
-      page_metadata: z.record(z.any()).optional(),
-      version: z.number().optional(),
-      created_at: z.string().optional(),
-      updated_at: z.string().optional(),
-    }),
-  ),
-  overwrite: z.boolean().optional().default(false),
-});
-
-wikiRouter.post(
-  "/:workspaceId/import",
-  zValidator("json", importSchema),
-  async (c) => {
-    const workspaceId = c.req.param("workspaceId");
-    const user = c.get("user");
-    const { pages, overwrite } = c.req.valid("json");
-
-    const result = await wikiService.importWeKnoraPages(
-      workspaceId,
-      pages,
-      user.id,
-    );
-
-    return c.json({
-      imported: result.imported,
-      skipped: result.skipped,
-      errors: result.errors.length > 0 ? result.errors : undefined,
-      pages: result.pages,
-    });
-  },
-);
 
 // Slug-Vorschläge (für Auto-Complete im Editor)
-wikiRouter.get("/:workspaceId/suggestions", async (c) => {
-  const workspaceId = c.req.param("workspaceId");
+pageRouter.get("/:wikiId/suggestions", async (c) => {
+  const wikiId = c.req.param("wikiId");
   const query = c.req.query("q") || "";
 
-  const result = await wikiService.listPages(workspaceId, {
+  const result = await wikiService.listPages(wikiId, {
     query,
     page_size: 20,
   });
@@ -466,4 +421,4 @@ wikiRouter.get("/:workspaceId/suggestions", async (c) => {
   });
 });
 
-export { wikiRouter };
+export { pageRouter };

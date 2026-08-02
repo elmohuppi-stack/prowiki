@@ -4,7 +4,7 @@ import {
   wikiPageRevisions,
   documents,
   chunks,
-  workspaces,
+  wikis,
   modelProviders,
   documentTopics,
 } from "../db/schema.ts";
@@ -39,7 +39,7 @@ const MAX_PAGE_SIZE = 200;
  * Wiki-Chunks bekommen document_id = "wiki--<page-id>".
  */
 export async function syncWikiPageToChunks(
-  workspaceId: string,
+  wikiId: string,
   pageId: string,
   content: string,
 ) {
@@ -51,18 +51,18 @@ export async function syncWikiPageToChunks(
     .where(
       and(
         eq(chunks.document_id, `wiki--${pageId}`),
-        eq(chunks.workspace_id, workspaceId),
+        eq(chunks.wiki_id, wikiId),
       ),
     );
 
-  // 2. Workspace für Chunk-Größe laden
+  // 2. Wiki für Chunk-Größe laden
   const [ws] = await db
     .select({
-      chunk_size: workspaces.chunk_size,
-      chunk_overlap: workspaces.chunk_overlap,
+      chunk_size: wikis.chunk_size,
+      chunk_overlap: wikis.chunk_overlap,
     })
-    .from(workspaces)
-    .where(eq(workspaces.id, workspaceId))
+    .from(wikis)
+    .where(eq(wikis.id, wikiId))
     .limit(1);
 
   const chunkSize = ws?.chunk_size || 512;
@@ -71,7 +71,7 @@ export async function syncWikiPageToChunks(
   // 3. Content chucken und speichern
   const chunkList = splitIntoChunks(content, chunkSize, chunkOverlap);
   if (chunkList.length > 0) {
-    await saveChunks(`wiki--${pageId}`, workspaceId, chunkList);
+    await saveChunks(`wiki--${pageId}`, wikiId, chunkList);
   }
 }
 
@@ -79,7 +79,7 @@ export async function syncWikiPageToChunks(
  * Löscht alle Chunks einer Wiki-Seite.
  */
 export async function deleteWikiPageChunks(
-  workspaceId: string,
+  wikiId: string,
   pageId: string,
 ) {
   await db
@@ -87,7 +87,7 @@ export async function deleteWikiPageChunks(
     .where(
       and(
         eq(chunks.document_id, `wiki--${pageId}`),
-        eq(chunks.workspace_id, workspaceId),
+        eq(chunks.wiki_id, wikiId),
       ),
     );
 }
@@ -104,7 +104,7 @@ export type WikiSort =
   | "connections_desc";
 
 export async function listPages(
-  workspaceId: string,
+  wikiId: string,
   options?: {
     page_type?: string;
     status?: string;
@@ -130,7 +130,7 @@ export async function listPages(
   // gesamten Wiki-Inhalt inkl. content in eine Antwort geladen.
   const pageSize = Math.min(Math.max(1, options?.page_size || 50), MAX_PAGE_SIZE);
 
-  let conditions = eq(wikiPages.workspace_id, workspaceId);
+  let conditions = eq(wikiPages.wiki_id, wikiId);
 
   if (options?.page_type) {
     conditions = and(conditions, eq(wikiPages.page_type, options.page_type))!;
@@ -281,7 +281,7 @@ export async function listPages(
 }
 
 /** Meistverlinkte Konzepte (Ebene 3) – Einstiegspunkte für den Backlink-Filter. */
-export async function topConcepts(workspaceId: string, limit = 20) {
+export async function topConcepts(wikiId: string, limit = 20) {
   const rows = await db
     .select({
       id: wikiPages.id,
@@ -294,7 +294,7 @@ export async function topConcepts(workspaceId: string, limit = 20) {
     .from(wikiPages)
     .where(
       and(
-        eq(wikiPages.workspace_id, workspaceId),
+        eq(wikiPages.wiki_id, wikiId),
         eq(wikiPages.page_type, "concept"),
         // Entwürfe (z.B. Chat-Verbund vor Veröffentlichung) ausblenden.
         ne(wikiPages.status, "draft"),
@@ -312,7 +312,7 @@ export async function topConcepts(workspaceId: string, limit = 20) {
  * 2600er-Hairball.
  */
 export async function getGraph(
-  workspaceId: string,
+  wikiId: string,
   opts: { focus?: string; types?: string[]; limit?: number },
 ) {
   const limit = opts.limit || 150;
@@ -328,7 +328,7 @@ export async function getGraph(
 
   // Ohne Fokus: Einstiegs-Wolke aus Top-Konzepten (keine Kanten).
   if (!opts.focus) {
-    const concepts = await topConcepts(workspaceId, Math.min(limit, 40));
+    const concepts = await topConcepts(wikiId, Math.min(limit, 40));
     return {
       focus: null,
       nodes: concepts
@@ -344,7 +344,7 @@ export async function getGraph(
     };
   }
 
-  const focus = await getPage(workspaceId, opts.focus);
+  const focus = await getPage(wikiId, opts.focus);
   if (!focus) return { focus: opts.focus, nodes: [], edges: [] };
 
   // 1-Hop-Nachbarn = ein-/ausgehende Links.
@@ -363,7 +363,7 @@ export async function getGraph(
           .from(wikiPages)
           .where(
             and(
-              eq(wikiPages.workspace_id, workspaceId),
+              eq(wikiPages.wiki_id, wikiId),
               inArray(wikiPages.slug, allSlugs),
               ne(wikiPages.status, "draft"),
             ),
@@ -396,11 +396,11 @@ export async function getGraph(
  * Altbestand ohne published_at sichtbar (dann zählt das Import-Datum).
  */
 export async function monthFacets(
-  workspaceId: string,
+  wikiId: string,
   opts?: { page_type?: string; channel?: string },
 ): Promise<{ month: string; count: number }[]> {
   const conds = [
-    sql`${wikiPages.workspace_id} = ${workspaceId}`,
+    sql`${wikiPages.wiki_id} = ${wikiId}`,
     sql`${wikiPages.status} <> 'draft'`,
     sql`${wikiPages.source_document_id} is not null`,
   ];
@@ -434,13 +434,13 @@ export async function monthFacets(
  * jsonb_array_elements_text entfaltet das Array, damit gezählt werden kann.
  */
 export async function flagFacets(
-  workspaceId: string,
+  wikiId: string,
 ): Promise<{ flag: string; count: number }[]> {
   const rows = await db.execute(sql`
     select f.flag, count(*)::int as count
     from ${wikiPages} w
     cross join lateral jsonb_array_elements_text(w.page_metadata -> 'flags') as f(flag)
-    where w.workspace_id = ${workspaceId}
+    where w.wiki_id = ${wikiId}
       and w.status <> 'draft'
       and jsonb_typeof(w.page_metadata -> 'flags') = 'array'
     group by f.flag
@@ -452,12 +452,12 @@ export async function flagFacets(
   }));
 }
 
-export async function getPage(workspaceId: string, slug: string) {
+export async function getPage(wikiId: string, slug: string) {
   const [page] = await db
     .select()
     .from(wikiPages)
     .where(
-      and(eq(wikiPages.workspace_id, workspaceId), eq(wikiPages.slug, slug)),
+      and(eq(wikiPages.wiki_id, wikiId), eq(wikiPages.slug, slug)),
     )
     .limit(1);
   return page || null;
@@ -473,17 +473,17 @@ export async function getPageById(id: string) {
 }
 
 export async function createPage(data: {
-  workspace_id: string;
+  wiki_id: string;
   slug: string;
   title: string;
   content?: string;
   summary?: string;
   page_type?: string;
   status?: string;
-  source_document_id?: string;
+  source_document_id?: string | null;
   parent_slug?: string | null;
   sort_order?: number;
-  created_by?: number;
+  created_by?: string;
   page_metadata?: Record<string, unknown>;
 }) {
   const id = crypto.randomUUID();
@@ -491,7 +491,7 @@ export async function createPage(data: {
     .insert(wikiPages)
     .values({
       id,
-      workspace_id: data.workspace_id,
+      wiki_id: data.wiki_id,
       slug: data.slug,
       title: data.title,
       content: data.content || "",
@@ -508,14 +508,14 @@ export async function createPage(data: {
 
   // Wiki-Content in Chunks syncen (für Chat-Suche)
   if (page.content) {
-    await syncWikiPageToChunks(data.workspace_id, page.id, page.content);
+    await syncWikiPageToChunks(data.wiki_id, page.id, page.content);
   }
 
   return page;
 }
 
 export async function updatePage(
-  workspaceId: string,
+  wikiId: string,
   slug: string,
   data: {
     title?: string;
@@ -527,9 +527,9 @@ export async function updatePage(
   },
   // Ebene 4: manual=true → Nutzer-Edit (Snapshot + Lock setzen). Ohne opts =
   // Auto-Update aus der Ingestion-Pipeline.
-  opts?: { manual?: boolean; editedBy?: number },
+  opts?: { manual?: boolean; editedBy?: string },
 ) {
-  const existing = await getPage(workspaceId, slug);
+  const existing = await getPage(wikiId, slug);
   if (!existing) return null;
 
   // Lock: Auto-Updates (Pipeline) überschreiben keine manuell editierten Seiten.
@@ -541,7 +541,7 @@ export async function updatePage(
   if (opts?.manual && data.content !== undefined) {
     await db.insert(wikiPageRevisions).values({
       page_id: existing.id,
-      workspace_id: workspaceId,
+      wiki_id: wikiId,
       version: existing.version,
       title: existing.title,
       summary: existing.summary,
@@ -567,13 +567,13 @@ export async function updatePage(
     .update(wikiPages)
     .set(updateData)
     .where(
-      and(eq(wikiPages.workspace_id, workspaceId), eq(wikiPages.slug, slug)),
+      and(eq(wikiPages.wiki_id, wikiId), eq(wikiPages.slug, slug)),
     )
     .returning();
 
   // Bei Content-Änderung: Chunks neu syncen
   if (page && data.content !== undefined) {
-    await syncWikiPageToChunks(workspaceId, page.id, page.content);
+    await syncWikiPageToChunks(wikiId, page.id, page.content);
   }
 
   return page || null;
@@ -586,7 +586,7 @@ export async function updatePage(
  * erzeugt keine neue Version und keinen Revisions-Snapshot.
  */
 export async function setPageHierarchy(
-  workspaceId: string,
+  wikiId: string,
   slug: string,
   data: { parent_slug: string | null; sort_order: number },
 ) {
@@ -594,7 +594,7 @@ export async function setPageHierarchy(
     .update(wikiPages)
     .set({ parent_slug: data.parent_slug, sort_order: data.sort_order })
     .where(
-      and(eq(wikiPages.workspace_id, workspaceId), eq(wikiPages.slug, slug)),
+      and(eq(wikiPages.wiki_id, wikiId), eq(wikiPages.slug, slug)),
     )
     .returning();
   return page || null;
@@ -602,8 +602,8 @@ export async function setPageHierarchy(
 
 // Ebene 4: Versionshistorie ----
 
-export async function listRevisions(workspaceId: string, slug: string) {
-  const page = await getPage(workspaceId, slug);
+export async function listRevisions(wikiId: string, slug: string) {
+  const page = await getPage(wikiId, slug);
   if (!page) return [];
   return await db
     .select()
@@ -614,10 +614,10 @@ export async function listRevisions(workspaceId: string, slug: string) {
 
 /** Stellt eine frühere Fassung wieder her (die aktuelle wird zuvor als Revision gesichert). */
 export async function restoreRevision(
-  workspaceId: string,
+  wikiId: string,
   slug: string,
   revisionId: number,
-  editedBy?: number,
+  editedBy?: string,
 ) {
   const [rev] = await db
     .select()
@@ -627,20 +627,20 @@ export async function restoreRevision(
   if (!rev) return null;
   // updatePage(manual) sichert die aktuelle Fassung und setzt die alte ein.
   return await updatePage(
-    workspaceId,
+    wikiId,
     slug,
     { title: rev.title, summary: rev.summary, content: rev.content },
     { manual: true, editedBy },
   );
 }
 
-export async function deletePage(workspaceId: string, slug: string) {
+export async function deletePage(wikiId: string, slug: string) {
   // Erst die Seite laden (für Chunk-Löschung)
   const [page] = await db
     .select({ id: wikiPages.id })
     .from(wikiPages)
     .where(
-      and(eq(wikiPages.workspace_id, workspaceId), eq(wikiPages.slug, slug)),
+      and(eq(wikiPages.wiki_id, wikiId), eq(wikiPages.slug, slug)),
     )
     .limit(1);
 
@@ -653,7 +653,7 @@ export async function deletePage(workspaceId: string, slug: string) {
     })
     .where(
       and(
-        eq(wikiPages.workspace_id, workspaceId),
+        eq(wikiPages.wiki_id, wikiId),
         sql`${slug} = ANY(in_links)`,
       ),
     );
@@ -668,25 +668,25 @@ export async function deletePage(workspaceId: string, slug: string) {
   await db
     .delete(wikiPages)
     .where(
-      and(eq(wikiPages.workspace_id, workspaceId), eq(wikiPages.slug, slug)),
+      and(eq(wikiPages.wiki_id, wikiId), eq(wikiPages.slug, slug)),
     );
 
   // Wiki-Chunks aufräumen
   if (page?.id) {
-    await deleteWikiPageChunks(workspaceId, page.id);
+    await deleteWikiPageChunks(wikiId, page.id);
   }
 }
 
 // --- Chat-Verbund (Draft-Cluster) ---
 
 /** Alle Seiten eines Chat-Verbunds (Cluster), Hauptseite zuerst. */
-export async function listClusterDrafts(workspaceId: string, clusterId: string) {
+export async function listClusterDrafts(wikiId: string, clusterId: string) {
   const rows = await db
     .select(getTableColumns(wikiPages))
     .from(wikiPages)
     .where(
       and(
-        eq(wikiPages.workspace_id, workspaceId),
+        eq(wikiPages.wiki_id, wikiId),
         sql`${wikiPages.page_metadata}->>'cluster_id' = ${clusterId}`,
       ),
     )
@@ -694,10 +694,10 @@ export async function listClusterDrafts(workspaceId: string, clusterId: string) 
   return rows;
 }
 
-/** Offene Entwurfs-Verbünde eines Workspace (gruppiert nach cluster_id) –
+/** Offene Entwurfs-Verbünde eines Wiki (gruppiert nach cluster_id) –
  * damit der Wiki-Browser auf noch nicht veröffentlichte Chat-Verbünde hinweisen
  * und zurück ins Review verlinken kann. */
-export async function listDraftClusters(workspaceId: string) {
+export async function listDraftClusters(wikiId: string) {
   const rows = await db
     .select({
       title: wikiPages.title,
@@ -707,7 +707,7 @@ export async function listDraftClusters(workspaceId: string) {
     .from(wikiPages)
     .where(
       and(
-        eq(wikiPages.workspace_id, workspaceId),
+        eq(wikiPages.wiki_id, wikiId),
         eq(wikiPages.status, "draft"),
       ),
     );
@@ -737,7 +737,7 @@ export async function listDraftClusters(workspaceId: string) {
 /** Alle (noch nicht veröffentlichten, nicht handeditierten) Draft-Seiten einer
  * Chat-Session löschen – für "Regenerieren = ersetzen". */
 export async function deleteSessionDrafts(
-  workspaceId: string,
+  wikiId: string,
   sessionId: string,
 ): Promise<number> {
   const rows = await db
@@ -745,21 +745,21 @@ export async function deleteSessionDrafts(
     .from(wikiPages)
     .where(
       and(
-        eq(wikiPages.workspace_id, workspaceId),
+        eq(wikiPages.wiki_id, wikiId),
         eq(wikiPages.status, "draft"),
         eq(wikiPages.manually_edited, false),
         sql`${wikiPages.page_metadata}->>'chat_session_id' = ${sessionId}`,
       ),
     );
   for (const r of rows) {
-    await deletePage(workspaceId, r.slug);
+    await deletePage(wikiId, r.slug);
   }
   return rows.length;
 }
 
 /** Einen Chat-Verbund veröffentlichen: alle Draft-Seiten auf published setzen. */
 export async function publishCluster(
-  workspaceId: string,
+  wikiId: string,
   clusterId: string,
 ): Promise<number> {
   const res = await db
@@ -767,7 +767,7 @@ export async function publishCluster(
     .set({ status: "published", updated_at: new Date() })
     .where(
       and(
-        eq(wikiPages.workspace_id, workspaceId),
+        eq(wikiPages.wiki_id, wikiId),
         eq(wikiPages.status, "draft"),
         sql`${wikiPages.page_metadata}->>'cluster_id' = ${clusterId}`,
       ),
@@ -779,7 +779,7 @@ export async function publishCluster(
 // --- Wiki-Link Resolution ---
 
 export async function resolveLinks(
-  workspaceId: string,
+  wikiId: string,
   content: string,
 ): Promise<{ out_links: string[]; content: string }> {
   const linkRegex = /\[\[([^\]]+)\]\]/g;
@@ -799,7 +799,7 @@ export async function resolveLinks(
     .from(wikiPages)
     .where(
       and(
-        eq(wikiPages.workspace_id, workspaceId),
+        eq(wikiPages.wiki_id, wikiId),
         inArray(wikiPages.slug, slugs),
       ),
     );
@@ -810,13 +810,13 @@ export async function resolveLinks(
 }
 
 export async function updateIncomingLinks(
-  workspaceId: string,
+  wikiId: string,
   slug: string,
   outLinks: string[],
 ) {
   // Für jede verlinkte Seite: in_links aktualisieren
   for (const targetSlug of outLinks) {
-    const targetPage = await getPage(workspaceId, targetSlug);
+    const targetPage = await getPage(wikiId, targetSlug);
     if (targetPage) {
       const currentInLinks: string[] = Array.isArray(targetPage.in_links)
         ? targetPage.in_links
@@ -830,7 +830,7 @@ export async function updateIncomingLinks(
           })
           .where(
             and(
-              eq(wikiPages.workspace_id, workspaceId),
+              eq(wikiPages.wiki_id, wikiId),
               eq(wikiPages.slug, targetSlug),
             ),
           );
@@ -841,11 +841,11 @@ export async function updateIncomingLinks(
 
 // --- Wiki Stats ---
 
-export async function getStats(workspaceId: string) {
+export async function getStats(wikiId: string) {
   // Entwürfe (unveröffentlichte Chat-Verbünde) zählen nicht mit – sonst weicht
   // die Statistik von der (published-gefilterten) Wiki-Liste ab.
   const published = and(
-    eq(wikiPages.workspace_id, workspaceId),
+    eq(wikiPages.wiki_id, wikiId),
     ne(wikiPages.status, "draft"),
   );
 
@@ -880,149 +880,10 @@ export async function getStats(workspaceId: string) {
   };
 }
 
-// --- WeKnora Import ---
-
-export interface WeKnoraPage {
-  id?: string;
-  knowledge_base_id?: string;
-  slug: string;
-  title: string;
-  summary?: string;
-  content?: string;
-  page_type?: string;
-  status?: string;
-  out_links?: string[];
-  in_links?: string[];
-  aliases?: string[];
-  source_refs?: string[];
-  page_metadata?: Record<string, any>;
-  version?: number;
-  created_at?: string;
-  updated_at?: string;
-}
-
-const PAGE_TYPE_MAP: Record<string, string> = {
-  entity: "entity",
-  concept: "concept",
-  article: "article",
-  index: "index",
-  log: "log",
-  synthesis: "synthesis",
-  comparison: "comparison",
-  youtube_transcript: "youtube_transcript",
-};
-
-function mapPageType(type: string | undefined): string {
-  if (!type) return "article";
-  const lower = type.toLowerCase();
-  return PAGE_TYPE_MAP[lower] || "article";
-}
-
-export async function importWeKnoraPages(
-  workspaceId: string,
-  pages: WeKnoraPage[],
-  createdBy: number,
-): Promise<{
-  imported: number;
-  skipped: number;
-  errors: string[];
-  pages: any[];
-}> {
-  let imported = 0;
-  let skipped = 0;
-  const errors: string[] = [];
-  const importedPages: any[] = [];
-
-  // Bestehende Slugs abrufen
-  const existing = await listPages(workspaceId, { page_size: 500 });
-  const existingSlugs = new Set(existing.pages.map((p) => p.slug));
-
-  for (const wp of pages) {
-    try {
-      // Slug generieren – falls schon vorhanden, counter anhängen
-      let slug = wp.slug?.trim();
-      if (!slug) {
-        slug = wp.title
-          .toLowerCase()
-          .replace(/[^a-z0-9äöüß]+/g, "-")
-          .replace(/^-|-$/g, "")
-          .slice(0, 200);
-      }
-      if (!slug) {
-        errors.push(`Page "${wp.title}" has no valid slug – skipped`);
-        skipped++;
-        continue;
-      }
-
-      // Prüfen ob bereits importiert
-      if (existingSlugs.has(slug)) {
-        // Slug mit Suffix
-        let counter = 1;
-        while (existingSlugs.has(`${slug}-${counter}`)) counter++;
-        slug = `${slug}-${counter}`;
-      }
-
-      existingSlugs.add(slug);
-
-      const page = await createPage({
-        workspace_id: workspaceId,
-        slug,
-        title: wp.title || slug,
-        content: wp.content || "",
-        summary: wp.summary || "",
-        page_type: mapPageType(wp.page_type),
-        source_document_id: null,
-        created_by: createdBy,
-      });
-
-      // Aliases, source_refs, page_metadata setzen
-      if (
-        (wp.aliases && wp.aliases.length > 0) ||
-        (wp.source_refs && wp.source_refs.length > 0) ||
-        (wp.page_metadata && Object.keys(wp.page_metadata).length > 0)
-      ) {
-        await db
-          .update(wikiPages)
-          .set({
-            aliases: wp.aliases || [],
-            source_refs: wp.source_refs || [],
-            page_metadata: wp.page_metadata || {},
-            updated_at: new Date(),
-          })
-          .where(
-            and(
-              eq(wikiPages.workspace_id, workspaceId),
-              eq(wikiPages.slug, slug),
-            ),
-          );
-      }
-
-      // out_links aus Content extrahieren
-      const { out_links } = await resolveLinks(workspaceId, page.content);
-      const combinedLinks = [
-        ...new Set([...out_links, ...(wp.out_links || [])]),
-      ];
-
-      if (combinedLinks.length > 0) {
-        await updatePage(workspaceId, slug, { out_links: combinedLinks });
-        await updateIncomingLinks(workspaceId, slug, combinedLinks);
-      }
-
-      importedPages.push({ ...page, slug });
-      imported++;
-    } catch (e: any) {
-      errors.push(`Error importing "${wp.title || wp.slug}": ${e.message}`);
-      skipped++;
-    }
-  }
-
-  return { imported, skipped, errors, pages: importedPages };
-}
-
 // --- Wiki Generation via LLM ---
 
 export async function generateWikiPage(
-  workspaceId: string,
+  wikiId: string,
   documentId: string,
   existingSlugs: string[],
 ): Promise<Array<{
@@ -1035,7 +896,7 @@ export async function generateWikiPage(
   const t0 = Date.now();
   console.log(`[wiki] ========== generateWikiPage START ==========`);
   console.log(`[wiki] Document ID: ${documentId}`);
-  console.log(`[wiki] Workspace ID: ${workspaceId}`);
+  console.log(`[wiki] Wiki ID: ${wikiId}`);
   console.log(`[wiki] Existing slugs: ${existingSlugs.length}`);
 
   // Dokument laden
@@ -1088,7 +949,7 @@ export async function generateWikiPage(
   }
 
   console.log(
-    `[wiki] LLM-Provider: ${provider.provider_name || provider.provider_type} (${provider.default_model})`,
+    `[wiki] LLM-Provider: ${provider.name || provider.provider_type} (${provider.default_model})`,
   );
   console.log(`[wiki] API-Base: ${provider.api_base_url}`);
 
@@ -1100,7 +961,7 @@ export async function generateWikiPage(
           .from(wikiPages)
           .where(
             and(
-              eq(wikiPages.workspace_id, workspaceId),
+              eq(wikiPages.wiki_id, wikiId),
               eq(wikiPages.source_document_id, documentId),
               inArray(wikiPages.slug, existingSlugs),
             ),

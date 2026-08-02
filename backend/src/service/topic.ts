@@ -16,12 +16,12 @@ export function slugify(label: string): string {
     .slice(0, 80) || "thema";
 }
 
-/** Themen eines Workspace inkl. doc_count, sortiert. */
-export async function listTopics(workspaceId: string) {
+/** Themen eines Wiki inkl. doc_count, sortiert. */
+export async function listTopics(wikiId: string) {
   const rows = await db
     .select({
       id: topics.id,
-      workspace_id: topics.workspace_id,
+      wiki_id: topics.wiki_id,
       slug: topics.slug,
       label: topics.label,
       description: topics.description,
@@ -32,25 +32,25 @@ export async function listTopics(workspaceId: string) {
     })
     .from(topics)
     .leftJoin(documentTopics, eq(documentTopics.topic_id, topics.id))
-    .where(eq(topics.workspace_id, workspaceId))
+    .where(eq(topics.wiki_id, wikiId))
     .groupBy(topics.id)
     .orderBy(asc(topics.sort_order), asc(topics.label));
   return rows.map((r) => ({ ...r, doc_count: Number(r.doc_count || 0) }));
 }
 
 async function uniqueSlug(
-  workspaceId: string,
+  wikiId: string,
   base: string,
   excludeId?: string,
 ): Promise<string> {
   let slug = base;
   let n = 1;
-  // Kollisionen im Workspace vermeiden (unique index (workspace_id, slug)).
+  // Kollisionen im Wiki vermeiden (unique index (wiki_id, slug)).
   while (true) {
     const [existing] = await db
       .select({ id: topics.id })
       .from(topics)
-      .where(and(eq(topics.workspace_id, workspaceId), eq(topics.slug, slug)))
+      .where(and(eq(topics.wiki_id, wikiId), eq(topics.slug, slug)))
       .limit(1);
     if (!existing || existing.id === excludeId) return slug;
     slug = `${base}-${++n}`;
@@ -58,16 +58,16 @@ async function uniqueSlug(
 }
 
 export async function createTopic(
-  workspaceId: string,
+  wikiId: string,
   data: { label: string; slug?: string; description?: string; color?: string; sort_order?: number },
 ) {
   const base = slugify(data.slug || data.label);
-  const slug = await uniqueSlug(workspaceId, base);
+  const slug = await uniqueSlug(wikiId, base);
   const [topic] = await db
     .insert(topics)
     .values({
       id: crypto.randomUUID(),
-      workspace_id: workspaceId,
+      wiki_id: wikiId,
       slug,
       label: data.label,
       description: data.description ?? null,
@@ -164,11 +164,11 @@ export interface TopicSuggestion {
 
 /**
  * Schlägt ~12–18 Ober-Themen vor, indem die vorhandenen Concept-/Entity-Titel
- * des Workspace von der LLM geclustert werden. Persistiert NICHTS – der User
+ * des Wiki von der LLM geclustert werden. Persistiert NICHTS – der User
  * übernimmt/ändert die Vorschläge im UI.
  */
 export async function suggestTopics(
-  workspaceId: string,
+  wikiId: string,
 ): Promise<TopicSuggestion[]> {
   // Concepts sind das stärkste Themen-Signal; Entities ergänzen.
   const conceptRows = await db
@@ -176,7 +176,7 @@ export async function suggestTopics(
     .from(wikiPages)
     .where(
       and(
-        eq(wikiPages.workspace_id, workspaceId),
+        eq(wikiPages.wiki_id, wikiId),
         eq(wikiPages.page_type, "concept"),
       ),
     )
@@ -214,15 +214,15 @@ ${labels.slice(0, 400).join(", ")}`;
 
 /**
  * Klassifiziert einen Text (z.B. Dokument-Summary) gegen die aktuellen
- * Workspace-Themen und gibt die passenden topic_ids zurück (0–3).
+ * Wiki-Themen und gibt die passenden topic_ids zurück (0–3).
  * Gibt [] zurück, wenn keine Themen definiert sind.
  */
 export async function classifyText(
-  workspaceId: string,
+  wikiId: string,
   text: string,
 ): Promise<string[]> {
   if (!text?.trim()) return [];
-  const available = await listTopics(workspaceId);
+  const available = await listTopics(wikiId);
   if (available.length === 0) return [];
 
   const provider = await getActiveProvider();
@@ -250,7 +250,7 @@ ${text.slice(0, 4000)}`;
 
 /** Dokument-IDs, die eines der angegebenen Themen haben (für Filter). */
 export async function documentIdsForTopics(
-  workspaceId: string,
+  wikiId: string,
   topicIds: string[],
 ): Promise<string[]> {
   if (topicIds.length === 0) return [];
@@ -260,7 +260,7 @@ export async function documentIdsForTopics(
     .innerJoin(topics, eq(documentTopics.topic_id, topics.id))
     .where(
       and(
-        eq(topics.workspace_id, workspaceId),
+        eq(topics.wiki_id, wikiId),
         inArray(documentTopics.topic_id, topicIds),
       ),
     );

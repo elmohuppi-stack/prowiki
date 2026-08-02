@@ -13,12 +13,12 @@ export interface SearchResult {
 
 // Hybrid Search: Vektor + Keyword kombinieren
 export async function hybridSearch(
-  workspaceId: string,
+  wikiId: string,
   query: string,
   topK: number = 10,
 ): Promise<SearchResult[]> {
-  const vectorResults = await vectorSearch(workspaceId, query, topK);
-  const keywordResults = await keywordSearch(workspaceId, query, topK);
+  const vectorResults = await vectorSearch(wikiId, query, topK);
+  const keywordResults = await keywordSearch(wikiId, query, topK);
 
   // Ergebnisse mischen (hybrid score = max beider Scores)
   const merged = new Map<string, SearchResult>();
@@ -43,7 +43,7 @@ export async function hybridSearch(
 
 // Vektor-Suche (pgvector cosine similarity)
 async function vectorSearch(
-  workspaceId: string,
+  wikiId: string,
   query: string,
   topK: number,
 ): Promise<SearchResult[]> {
@@ -66,7 +66,7 @@ async function vectorSearch(
       FROM chunks c
       LEFT JOIN documents d ON c.document_id = d.id
       LEFT JOIN wiki_pages w ON c.document_id = 'wiki--' || w.id
-      WHERE c.workspace_id = ${workspaceId}
+      WHERE c.wiki_id = ${wikiId}
         AND c.embedding IS NOT NULL
       ORDER BY c.embedding <=> ${vectorStr}::vector
       LIMIT ${topK}`);
@@ -88,7 +88,7 @@ async function vectorSearch(
 
 // Keyword-Suche (PostgreSQL tsvector)
 async function keywordSearch(
-  workspaceId: string,
+  wikiId: string,
   query: string,
   topK: number,
 ): Promise<SearchResult[]> {
@@ -113,7 +113,7 @@ async function keywordSearch(
       FROM chunks c
       LEFT JOIN documents d ON c.document_id = d.id
       LEFT JOIN wiki_pages w ON c.document_id = 'wiki--' || w.id
-      WHERE c.workspace_id = ${workspaceId}
+      WHERE c.wiki_id = ${wikiId}
         AND to_tsvector('german', c.content) @@ to_tsquery('german', ${searchTerms})
       ORDER BY score DESC
       LIMIT ${topK}`);

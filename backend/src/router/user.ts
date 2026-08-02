@@ -4,18 +4,18 @@
 
 import { Hono } from "hono";
 import { asc } from "drizzle-orm";
-import { authMiddleware } from "../middleware/auth.ts";
+import { sessionMiddleware } from "../middleware/auth.ts";
 import { db } from "../db/index.ts";
-import { users } from "../db/schema.ts";
+import { user } from "../db/schema.ts";
 
 const userRouter = new Hono();
-userRouter.use("*", authMiddleware);
+userRouter.use("*", sessionMiddleware);
 
 userRouter.get("/", async (c) => {
   const list = await db
-    .select({ id: users.id, name: users.name, email: users.email })
-    .from(users)
-    .orderBy(asc(users.name));
+    .select({ id: user.id, name: user.name, email: user.email })
+    .from(user)
+    .orderBy(asc(user.name));
   return c.json({ users: list });
 });
 

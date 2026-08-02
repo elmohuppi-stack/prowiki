@@ -28,10 +28,10 @@ export interface ListDocumentsOptions {
 }
 
 export async function listDocuments(
-  workspaceId: string,
+  wikiId: string,
   opts: ListDocumentsOptions = {},
 ) {
-  const conditions = [eq(documents.workspace_id, workspaceId)];
+  const conditions = [eq(documents.wiki_id, wikiId)];
   if (opts.type) conditions.push(eq(documents.type, opts.type));
   if (opts.channel) conditions.push(eq(documents.channel, opts.channel));
   if (opts.query) conditions.push(ilike(documents.title, `%${opts.query}%`));
@@ -89,14 +89,14 @@ export async function listDocuments(
     .orderBy(orderBy);
 }
 
-/** Distinct-Kanäle eines Workspace (für das Kanal-Filter-Dropdown). */
-export async function listChannels(workspaceId: string): Promise<string[]> {
+/** Distinct-Kanäle eines Wiki (für das Kanal-Filter-Dropdown). */
+export async function listChannels(wikiId: string): Promise<string[]> {
   const rows = await db
     .selectDistinct({ channel: documents.channel })
     .from(documents)
     .where(
       and(
-        eq(documents.workspace_id, workspaceId),
+        eq(documents.wiki_id, wikiId),
         sql`${documents.channel} is not null and ${documents.channel} <> ''`,
       ),
     );
@@ -117,7 +117,7 @@ export async function getDocument(id: string) {
 
 export async function createDocument(data: {
   id: string;
-  workspace_id: string;
+  wiki_id: string;
   title: string;
   type: string;
   source: string;
@@ -130,7 +130,8 @@ export async function createDocument(data: {
   published_at?: Date | null;
   duration?: number | null;
   source_metadata?: Record<string, unknown>;
-  created_by: number;
+  // null bei systemseitig erzeugten Dokumenten (Chat-Transkript, Kanal-Sync).
+  created_by: string | null;
 }) {
   const [doc] = await db.insert(documents).values(data).returning();
   return doc;
@@ -196,7 +197,7 @@ export async function updateDocumentContent(id: string, content: string) {
 export async function deleteDocument(id: string) {
   await db.transaction(async (tx) => {
     const [doc] = await tx
-      .select({ workspace_id: documents.workspace_id })
+      .select({ wiki_id: documents.wiki_id })
       .from(documents)
       .where(eq(documents.id, id))
       .limit(1);
@@ -234,7 +235,7 @@ export async function deleteDocument(id: string) {
                 WHERE e <> ALL(${slugs})
               ), '[]'::jsonb),
               updated_at = now()
-          WHERE workspace_id = ${doc.workspace_id}
+          WHERE wiki_id = ${doc.wiki_id}
             AND EXISTS (
               SELECT 1
               FROM jsonb_array_elements_text(${sql.raw(column)}) AS e
@@ -277,7 +278,7 @@ export async function deleteDocument(id: string) {
 
 export async function saveChunks(
   documentId: string,
-  workspaceId: string,
+  wikiId: string,
   chunkData: { content: string; chunk_index: number; token_count: number }[],
 ) {
   if (chunkData.length === 0) return [];
@@ -287,7 +288,7 @@ export async function saveChunks(
   const values = chunkData.map((c) => ({
     id: crypto.randomUUID(),
     document_id: documentId,
-    workspace_id: workspaceId,
+    wiki_id: wikiId,
     content: c.content,
     chunk_index: c.chunk_index,
     token_count: c.token_count,

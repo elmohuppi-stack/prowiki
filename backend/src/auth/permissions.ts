@@ -2,7 +2,7 @@
  * Rechtemodell prowiki — Capabilities statt Rollen-Vergleiche.
  *
  * In knora war das Recht über zwei verkoppelte Rollenfelder verteilt
- * (`users.role` global + `workspace_members.role` lokal) und die Prüfung stand
+ * (`user.role` global + `workspace_members.role` lokal) und die Prüfung stand
  * als `if (user.role === "viewer") return false` mitten in der Middleware. Das
  * hatte zwei Folgen: ein global als Viewer angelegter Nutzer konnte im *eigenen*
  * Workspace nichts schreiben, und jede neue Abstufung (Autor darf schreiben,
@@ -30,7 +30,7 @@ import {
  */
 export const statement = {
   ...defaultStatements,
-  wiki: ["read", "write", "publish", "delete"],
+  wiki: ["create", "read", "write", "publish", "delete"],
   source: ["import", "delete"],
   chat: ["use"],
   billing: ["manage"],
@@ -42,7 +42,7 @@ export const ac = createAccessControl(statement);
 /** Voller Zugriff inklusive Abrechnung und Löschen der Organisation. */
 export const owner = ac.newRole({
   ...ownerAc.statements,
-  wiki: ["read", "write", "publish", "delete"],
+  wiki: ["create", "read", "write", "publish", "delete"],
   source: ["import", "delete"],
   chat: ["use"],
   billing: ["manage"],
@@ -52,7 +52,7 @@ export const owner = ac.newRole({
 /** Wie owner, aber ohne Abrechnung — die bleibt beim Inhaber. */
 export const admin = ac.newRole({
   ...adminAc.statements,
-  wiki: ["read", "write", "publish", "delete"],
+  wiki: ["create", "read", "write", "publish", "delete"],
   source: ["import", "delete"],
   chat: ["use"],
   settings: ["manage"],
@@ -60,7 +60,7 @@ export const admin = ac.newRole({
 
 /** Redaktionsleitung: darf importieren und veröffentlichen, aber nicht verwalten. */
 export const editor = ac.newRole({
-  wiki: ["read", "write", "publish"],
+  wiki: ["create", "read", "write", "publish"],
   source: ["import"],
   chat: ["use"],
 });

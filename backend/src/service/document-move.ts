@@ -1,5 +1,5 @@
 // Verschieben eines Dokuments samt der daraus generierten Wiki-Artikel in einen
-// anderen Workspace.
+// anderen Wiki.
 //
 // Was mitwandert:
 //   documents, chunks (Dokument-Chunks + die "wiki--<page-id>"-Chunks der
@@ -12,13 +12,13 @@
 // Seite gemerged statt neu angelegt, und ihre chunk_refs sammeln sich über
 // mehrere Dokumente an (siehe wiki-generate.ts, upsertPage). source_document_id
 // zeigt dabei nur auf das ERSTE Dokument und taugt nicht als Besitznachweis.
-// Sie bleiben deshalb im Quell-Workspace; Links der verschobenen Seiten auf sie
+// Sie bleiben deshalb im Quell-Wiki; Links der verschobenen Seiten auf sie
 // werden zu Klartext aufgelöst (stripDeadLinks).
 //
 // Embeddings müssen nicht neu berechnet werden: der Embedding-Provider wird
 // global gewählt (service/embedding.ts) und das Dokument-Chunking ignoriert die
-// workspace-eigene chunk_size (router/document.ts, scheduleChunking). Sobald
-// eines von beidem workspace-spezifisch wird, muss hier neu embedded werden.
+// wiki-eigene chunk_size (router/document.ts, scheduleChunking). Sobald
+// eines von beidem wiki-spezifisch wird, muss hier neu embedded werden.
 
 import { db } from "../db/index.ts";
 import {
@@ -29,7 +29,7 @@ import {
   wikiPages,
   wikiPageRevisions,
   activityLogs,
-  workspaces,
+  wikis,
 } from "../db/schema.ts";
 import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { stripDeadLinks } from "./wiki-generate.ts";
@@ -73,7 +73,7 @@ async function loadMovingPages(runner: Tx | typeof db, documentId: string) {
     );
 }
 
-/** Seiten, die auf das Dokument zeigen, aber im Quell-Workspace bleiben. */
+/** Seiten, die auf das Dokument zeigen, aber im Quell-Wiki bleiben. */
 async function loadStayingPages(runner: Tx | typeof db, documentId: string) {
   return await runner
     .select({
@@ -114,21 +114,21 @@ export async function previewMove(
     .where(eq(documents.id, documentId))
     .limit(1);
   if (!doc) return { error: "Document not found" };
-  if (doc.workspace_id === targetWorkspaceId) {
-    return { error: "Dokument liegt bereits in diesem Workspace" };
+  if (doc.wiki_id === targetWorkspaceId) {
+    return { error: "Dokument liegt bereits in diesem Wiki" };
   }
 
   const [source] = await db
-    .select({ id: workspaces.id, name: workspaces.name })
-    .from(workspaces)
-    .where(eq(workspaces.id, doc.workspace_id))
+    .select({ id: wikis.id, name: wikis.name })
+    .from(wikis)
+    .where(eq(wikis.id, doc.wiki_id))
     .limit(1);
   const [target] = await db
-    .select({ id: workspaces.id, name: workspaces.name })
-    .from(workspaces)
-    .where(eq(workspaces.id, targetWorkspaceId))
+    .select({ id: wikis.id, name: wikis.name })
+    .from(wikis)
+    .where(eq(wikis.id, targetWorkspaceId))
     .limit(1);
-  if (!target) return { error: "Ziel-Workspace nicht gefunden" };
+  if (!target) return { error: "Ziel-Wiki nicht gefunden" };
 
   const movingPages = await loadMovingPages(db, documentId);
   const stayingPages = await loadStayingPages(db, documentId);
@@ -163,7 +163,7 @@ export async function previewMove(
       .from(wikiPages)
       .where(
         and(
-          eq(wikiPages.workspace_id, targetWorkspaceId),
+          eq(wikiPages.wiki_id, targetWorkspaceId),
           inArray(wikiPages.slug, movingSlugs),
         ),
       );
@@ -183,7 +183,7 @@ export async function previewMove(
       .from(wikiPages)
       .where(
         and(
-          eq(wikiPages.workspace_id, targetWorkspaceId),
+          eq(wikiPages.wiki_id, targetWorkspaceId),
           inArray(wikiPages.slug, linkedSlugs),
         ),
       );
@@ -206,7 +206,7 @@ export async function previewMove(
       .from(topics)
       .where(
         and(
-          eq(topics.workspace_id, targetWorkspaceId),
+          eq(topics.wiki_id, targetWorkspaceId),
           inArray(topics.slug, topicSlugs),
         ),
       );
@@ -216,7 +216,7 @@ export async function previewMove(
   return {
     document: { id: doc.id, title: doc.title },
     source_workspace: {
-      id: source?.id ?? doc.workspace_id,
+      id: source?.id ?? doc.wiki_id,
       name: source?.name ?? "",
     },
     target_workspace: { id: target.id, name: target.name },
@@ -253,9 +253,9 @@ export async function moveDocument(
       .limit(1);
     if (!doc) throw new Error("Document not found");
 
-    const sourceWorkspaceId = doc.workspace_id;
+    const sourceWorkspaceId = doc.wiki_id;
     if (sourceWorkspaceId === targetWorkspaceId) {
-      throw new Error("Dokument liegt bereits in diesem Workspace");
+      throw new Error("Dokument liegt bereits in diesem Wiki");
     }
 
     const movingPages = await loadMovingPages(tx, documentId);
@@ -270,7 +270,7 @@ export async function moveDocument(
           await tx
             .select({ slug: wikiPages.slug })
             .from(wikiPages)
-            .where(eq(wikiPages.workspace_id, targetWorkspaceId))
+            .where(eq(wikiPages.wiki_id, targetWorkspaceId))
         ).map((r) => r.slug),
       );
       for (const slug of originalSlugs) {
@@ -297,7 +297,7 @@ export async function moveDocument(
         await tx
           .select({ slug: wikiPages.slug })
           .from(wikiPages)
-          .where(eq(wikiPages.workspace_id, targetWorkspaceId))
+          .where(eq(wikiPages.wiki_id, targetWorkspaceId))
       ).map((r) => r.slug),
     );
     for (const s of movedSlugSet) targetSlugs.add(s);
@@ -325,7 +325,7 @@ export async function moveDocument(
       await tx
         .update(wikiPages)
         .set({
-          workspace_id: targetWorkspaceId,
+          wiki_id: targetWorkspaceId,
           slug: finalSlug(page.slug),
           content,
           out_links: outLinks,
@@ -339,18 +339,18 @@ export async function moveDocument(
     if (movingPageIds.length > 0) {
       await tx
         .update(wikiPageRevisions)
-        .set({ workspace_id: targetWorkspaceId })
+        .set({ wiki_id: targetWorkspaceId })
         .where(inArray(wikiPageRevisions.page_id, movingPageIds));
     }
 
-    // --- 4. Quell-Workspace aufräumen: Verweise auf die weggezogenen Slugs --
+    // --- 4. Quell-Wiki aufräumen: Verweise auf die weggezogenen Slugs --
     // in_links/out_links sind jsonb-Arrays; die verwaisten Einträge werden
     // herausgefiltert. Der Fließtext der zurückbleibenden Seiten wird bewusst
     // nicht angefasst.
     if (originalSlugs.length > 0) {
       for (const column of ["in_links", "out_links"] as const) {
         // Nur Seiten anfassen, die tatsächlich einen der Slugs führen – sonst
-        // bekäme der ganze Workspace ein neues updated_at und die Sortierung
+        // bekäme der ganze Wiki ein neues updated_at und die Sortierung
         // nach "zuletzt geändert" wäre entwertet.
         await tx.execute(sql`
           UPDATE wiki_pages
@@ -360,7 +360,7 @@ export async function moveDocument(
                 WHERE e <> ALL(${originalSlugs})
               ), '[]'::jsonb),
               updated_at = now()
-          WHERE workspace_id = ${sourceWorkspaceId}
+          WHERE wiki_id = ${sourceWorkspaceId}
             AND EXISTS (
               SELECT 1
               FROM jsonb_array_elements_text(${sql.raw(column)}) AS e
@@ -390,7 +390,7 @@ export async function moveDocument(
               ELSE COALESCE(in_links, '[]'::jsonb) || ${JSON.stringify([slug])}::jsonb
             END,
             updated_at = now()
-        WHERE workspace_id = ${targetWorkspaceId}
+        WHERE wiki_id = ${targetWorkspaceId}
           AND slug = ANY(${outLinks})
       `);
     }
@@ -398,13 +398,13 @@ export async function moveDocument(
     // --- 6. Chunks umziehen (Dokument + Wiki-Seiten) ------------------------
     await tx
       .update(chunks)
-      .set({ workspace_id: targetWorkspaceId })
+      .set({ wiki_id: targetWorkspaceId })
       .where(eq(chunks.document_id, documentId));
 
     if (movingPageIds.length > 0) {
       await tx
         .update(chunks)
-        .set({ workspace_id: targetWorkspaceId })
+        .set({ wiki_id: targetWorkspaceId })
         .where(
           inArray(
             chunks.document_id,
@@ -413,7 +413,7 @@ export async function moveDocument(
         );
     }
 
-    // --- 7. Themen auf den Ziel-Workspace mappen ----------------------------
+    // --- 7. Themen auf den Ziel-Wiki mappen ----------------------------
     const docTopics = await tx
       .select({
         assignment_id: documentTopics.id,
@@ -433,7 +433,7 @@ export async function moveDocument(
         .from(topics)
         .where(
           and(
-            eq(topics.workspace_id, targetWorkspaceId),
+            eq(topics.wiki_id, targetWorkspaceId),
             eq(topics.slug, t.slug),
           ),
         )
@@ -445,7 +445,7 @@ export async function moveDocument(
           .insert(topics)
           .values({
             id: crypto.randomUUID(),
-            workspace_id: targetWorkspaceId,
+            wiki_id: targetWorkspaceId,
             slug: t.slug,
             label: t.label,
             description: t.description,
@@ -465,12 +465,12 @@ export async function moveDocument(
     // --- 8. Dokument und Logs umziehen --------------------------------------
     await tx
       .update(activityLogs)
-      .set({ workspace_id: targetWorkspaceId })
+      .set({ wiki_id: targetWorkspaceId })
       .where(eq(activityLogs.document_id, documentId));
 
     const [updated] = await tx
       .update(documents)
-      .set({ workspace_id: targetWorkspaceId, updated_at: new Date() })
+      .set({ wiki_id: targetWorkspaceId, updated_at: new Date() })
       .where(eq(documents.id, documentId))
       .returning();
 

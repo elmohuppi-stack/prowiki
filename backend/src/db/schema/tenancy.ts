@@ -26,6 +26,29 @@ import { organization, user } from "./auth.ts";
 export const WIKI_VISIBILITIES = ["private", "link", "public"] as const;
 export type WikiVisibility = (typeof WIKI_VISIBILITIES)[number];
 
+/**
+ * Wiki-Tiefe: steuert das Verhältnis von Kosten zu Detailtiefe bei der
+ * Generierung. `capped` ist der Default — Entity/Concept-Seiten gedeckelt.
+ */
+export const WIKI_DEPTHS = ["full", "capped", "summary", "off"] as const;
+export type WikiDepth = (typeof WIKI_DEPTHS)[number];
+
+export interface WikiConfig {
+  auto_ingest: boolean;
+  synthesis_model_id: string | null;
+  wiki_language: string;
+  max_pages_per_ingest: number;
+  extraction_granularity: string;
+  wiki_depth: WikiDepth;
+}
+
+export interface IndexingStrategy {
+  vector_enabled: boolean;
+  keyword_enabled: boolean;
+  wiki_enabled: boolean;
+  graph_enabled: boolean;
+}
+
 export const modelProviders = pgTable("model_providers", {
   id: varchar("id", { length: 36 }).primaryKey(),
   // null = Plattform-Provider (von uns gestellt), sonst der eigene Schlüssel
@@ -79,13 +102,13 @@ export const wikis = pgTable(
     chat_model_id: varchar("chat_model_id", { length: 36 }).references(
       () => modelProviders.id,
     ),
-    indexing_strategy: jsonb("indexing_strategy").notNull().default({
+    indexing_strategy: jsonb("indexing_strategy").$type<IndexingStrategy>().notNull().default({
       vector_enabled: true,
       keyword_enabled: true,
       wiki_enabled: false,
       graph_enabled: false,
     }),
-    wiki_config: jsonb("wiki_config").default({
+    wiki_config: jsonb("wiki_config").$type<WikiConfig>().default({
       auto_ingest: false,
       synthesis_model_id: null,
       wiki_language: "de",

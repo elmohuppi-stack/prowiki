@@ -12,7 +12,7 @@
 // gespeichert; alle erzeugten Seiten verweisen per source_document_id darauf.
 //
 // Quelle: primär das Wissen des LLM, geformt durch das Gespräch; optional mit
-// RAG-Kontext aus den Workspace-Dokumenten angereichert.
+// RAG-Kontext aus den Wiki-Dokumenten angereichert.
 
 import { db } from "../db/index.ts";
 import { chatMessages, chatSessions, wikiPages } from "../db/schema.ts";
@@ -121,12 +121,12 @@ async function loadSessionTitle(sessionId: string): Promise<string> {
 
 /** Existierende (veröffentlichte) Seiten als Link-Ziele. */
 async function loadExistingPages(
-  workspaceId: string,
+  wikiId: string,
 ): Promise<{ slug: string; title: string }[]> {
   const rows = await db
     .select({ slug: wikiPages.slug, title: wikiPages.title })
     .from(wikiPages)
-    .where(eq(wikiPages.workspace_id, workspaceId))
+    .where(eq(wikiPages.wiki_id, wikiId))
     .limit(MAX_EXISTING_SLUGS);
   return rows;
 }
@@ -227,20 +227,20 @@ SUMMARY: {ein Satz, 15-40 Wörter}
  * Router vergeben, damit dieser sofort antworten und das Frontend pollen kann.
  */
 export async function generateClusterFromChat(opts: {
-  workspaceId: string;
+  wikiId: string;
   sessionId: string;
   clusterId: string;
   spec: ClusterSpec;
-  userId?: number;
+  userId?: string;
 }): Promise<void> {
-  const { workspaceId, sessionId, clusterId, spec, userId } = opts;
+  const { wikiId, sessionId, clusterId, spec, userId } = opts;
   const t0 = Date.now();
   const logId = await logActivity({
     action: "chat_wiki",
     status: "started",
     message: "Erzeuge Wiki-Verbund aus Gespräch …",
     details: { cluster_id: clusterId, session_id: sessionId },
-    workspace_id: workspaceId,
+    wiki_id: wikiId,
     user_id: userId,
   });
 
@@ -263,12 +263,12 @@ export async function generateClusterFromChat(opts: {
       return;
     }
 
-    // Optionaler RAG-Kontext aus Workspace-Dokumenten.
+    // Optionaler RAG-Kontext aus Wiki-Dokumenten.
     let ragContext = "";
     if (spec.use_rag) {
       try {
         const query = transcript.slice(0, 500);
-        const results = await hybridSearch(workspaceId, query, 6);
+        const results = await hybridSearch(wikiId, query, 6);
         ragContext = results
           .map((r: any) => `[${r.document_title}]: ${r.content}`)
           .join("\n\n")
@@ -278,7 +278,7 @@ export async function generateClusterFromChat(opts: {
       }
     }
 
-    const existing = await loadExistingPages(workspaceId);
+    const existing = await loadExistingPages(wikiId);
     const existingSlugSet = new Set(existing.map((p) => p.slug));
 
     // 1. Plan
@@ -322,13 +322,13 @@ export async function generateClusterFromChat(opts: {
       const sessionTitle = await loadSessionTitle(sessionId);
       await documentService.createDocument({
         id: docId,
-        workspace_id: workspaceId,
+        wiki_id: wikiId,
         title: `Chat: ${sessionTitle}`,
         type: "chat",
         source: `chat:${sessionId}`,
         content: transcript,
         source_metadata: { chat_session_id: sessionId, cluster_id: clusterId },
-        created_by: userId ?? 0,
+        created_by: userId ?? null,
       });
       await documentService.updateDocumentStatus(docId, "completed");
       sourceDocId = docId;
@@ -389,7 +389,7 @@ export async function generateClusterFromChat(opts: {
       const parsed = parseArticle(raw, item.page.title);
 
       await wikiService.createPage({
-        workspace_id: workspaceId,
+        wiki_id: wikiId,
         slug: item.slug,
         title: parsed.title,
         summary: parsed.summary,
@@ -414,15 +414,15 @@ export async function generateClusterFromChat(opts: {
     // 5. Links auflösen – jetzt existieren alle Cluster-Seiten, intra-Cluster
     //    [[links]] greifen. updateIncomingLinks pflegt in_links der Ziele.
     for (const item of toCreate) {
-      const page = await wikiService.getPage(workspaceId, item.slug);
+      const page = await wikiService.getPage(wikiId, item.slug);
       if (!page?.content) continue;
       const { out_links } = await wikiService.resolveLinks(
-        workspaceId,
+        wikiId,
         page.content,
       );
       if (out_links.length > 0) {
-        await wikiService.updatePage(workspaceId, item.slug, { out_links });
-        await wikiService.updateIncomingLinks(workspaceId, item.slug, out_links);
+        await wikiService.updatePage(wikiId, item.slug, { out_links });
+        await wikiService.updateIncomingLinks(wikiId, item.slug, out_links);
       }
     }
 
