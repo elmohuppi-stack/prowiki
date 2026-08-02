@@ -286,7 +286,7 @@
             Keine
             {{ activeTab === "entity" ? "Entitäten" : "Konzepte" }} gefunden.
           </p>
-          <p v-if="workspaceId && !hasActiveFilters" class="reader-actions">
+          <p v-if="wikiId && !hasActiveFilters" class="reader-actions">
             <button class="btn-primary" @click="showImport = true">
               📥 WeKnora importieren
             </button>
@@ -624,7 +624,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useAuthStore } from "../../stores/auth";
-import { useWorkspace } from "../../composables/useWorkspace";
+import { useWiki } from "../../composables/useWiki";
 import DatePicker from "primevue/datepicker";
 import SpeechBar from "../../components/SpeechBar.vue";
 import axios from "axios";
@@ -634,12 +634,12 @@ import DOMPurify from "dompurify";
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
-const { resolveWorkspace, isUUID } = useWorkspace();
+const { resolveWiki, isUUID } = useWiki();
 
-const rawWorkspaceId = computed(
-  () => ((route.params.id || route.params.workspaceId) as string) || "",
+const rawWikiId = computed(
+  () => ((route.params.id || route.params.wikiId) as string) || "",
 );
-const workspaceId = ref(rawWorkspaceId.value);
+const wikiId = ref(rawWikiId.value);
 const urlSlug = computed(() => (route.params.slug as string) || "");
 
 // Filter-/Facetten-State
@@ -718,7 +718,7 @@ const fileInput = ref<HTMLInputElement>();
 let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 let ready = false; // verhindert Auto-Reload durch Watcher während Initialisierung
 
-const base = computed(() => `/workspaces/${rawWorkspaceId.value}/wiki`);
+const base = computed(() => `/wikis/${rawWikiId.value}/wiki`);
 
 const hasActiveFilters = computed(
   () =>
@@ -864,15 +864,15 @@ onMounted(async () => {
     router.push("/login");
     return;
   }
-  if (rawWorkspaceId.value && !isUUID(rawWorkspaceId.value)) {
-    const resolved = await resolveWorkspace(rawWorkspaceId.value);
-    if (resolved) workspaceId.value = resolved.id;
-    else console.error("[wiki] Workspace nicht gefunden:", rawWorkspaceId.value);
+  if (rawWikiId.value && !isUUID(rawWikiId.value)) {
+    const resolved = await resolveWiki(rawWikiId.value);
+    if (resolved) wikiId.value = resolved.id;
+    else console.error("[wiki] Wiki nicht gefunden:", rawWikiId.value);
   }
 
   parseQueryFromUrl();
 
-  if (workspaceId.value) {
+  if (wikiId.value) {
     await Promise.all([
       loadIndex(),
       loadStats(),
@@ -889,17 +889,17 @@ onMounted(async () => {
   ready = true;
 });
 
-// Workspace-Wechsel via URL
-watch(rawWorkspaceId, async (newVal) => {
+// Wiki-Wechsel via URL
+watch(rawWikiId, async (newVal) => {
   if (newVal && !isUUID(newVal)) {
-    const resolved = await resolveWorkspace(newVal);
-    if (resolved) workspaceId.value = resolved.id;
+    const resolved = await resolveWiki(newVal);
+    if (resolved) wikiId.value = resolved.id;
   } else if (newVal) {
-    workspaceId.value = newVal;
+    wikiId.value = newVal;
   }
 });
-watch(workspaceId, () => {
-  if (!workspaceId.value) return;
+watch(wikiId, () => {
+  if (!wikiId.value) return;
   selectedPage.value = null;
   selectedSlug.value = "";
   loadIndex();
@@ -931,9 +931,9 @@ watch(filterDates, (val) => {
 // ---- Laden ----
 
 async function loadIndex() {
-  if (!workspaceId.value) return;
+  if (!wikiId.value) return;
   try {
-    const res = await axios.get(`/api/v1/wiki/${workspaceId.value}/index`);
+    const res = await axios.get(`/api/v1/pages/${wikiId.value}/index`);
     indexIntro.value = res.data.intro || "";
   } catch {
     /* no index yet */
@@ -945,10 +945,10 @@ const draftClusters = ref<
 >([]);
 
 async function loadDraftClusters() {
-  if (!workspaceId.value) return;
+  if (!wikiId.value) return;
   try {
     const res = await axios.get(
-      `/api/v1/wiki/${workspaceId.value}/draft-clusters`,
+      `/api/v1/pages/${wikiId.value}/draft-clusters`,
     );
     draftClusters.value = res.data.clusters || [];
   } catch {
@@ -957,13 +957,13 @@ async function loadDraftClusters() {
 }
 
 function openReview(clusterId: string) {
-  router.push(`/workspaces/${workspaceId.value}/wiki-review/${clusterId}`);
+  router.push(`/wikis/${wikiId.value}/wiki-review/${clusterId}`);
 }
 
 async function loadStats() {
-  if (!workspaceId.value) return;
+  if (!wikiId.value) return;
   try {
-    const res = await axios.get(`/api/v1/wiki/${workspaceId.value}/stats`);
+    const res = await axios.get(`/api/v1/pages/${wikiId.value}/stats`);
     const byType = res.data.pages_by_type || {};
     tabs.value = tabs.value.map((t) => ({ ...t, total: byType[t.type] || 0 }));
     stats.value = [
@@ -978,10 +978,10 @@ async function loadStats() {
 }
 
 async function loadChannels() {
-  if (!workspaceId.value) return;
+  if (!wikiId.value) return;
   try {
     const res = await axios.get(
-      `/api/v1/documents/${workspaceId.value}/channels`,
+      `/api/v1/documents/${wikiId.value}/channels`,
     );
     channels.value = res.data.channels || [];
   } catch {
@@ -990,9 +990,9 @@ async function loadChannels() {
 }
 
 async function loadTopics() {
-  if (!workspaceId.value) return;
+  if (!wikiId.value) return;
   try {
-    const res = await axios.get(`/api/v1/topics/${workspaceId.value}`);
+    const res = await axios.get(`/api/v1/topics/${wikiId.value}`);
     allTopics.value = res.data.topics || [];
   } catch {
     /* ignore */
@@ -1006,10 +1006,10 @@ function toggleTopicFilter(id: string) {
 }
 
 async function loadTopConcepts() {
-  if (!workspaceId.value) return;
+  if (!wikiId.value) return;
   try {
     const res = await axios.get(
-      `/api/v1/wiki/${workspaceId.value}/concepts/top?limit=15`,
+      `/api/v1/pages/${wikiId.value}/concepts/top?limit=15`,
     );
     topConceptsList.value = (res.data.concepts || []).filter(
       (c: any) => c.connections > 0,
@@ -1042,10 +1042,10 @@ function currentFilterParams(): Record<string, string> {
  *  Ergebnisliste passen (Entity-/Concept-Seiten hängen am erstgenerierenden
  *  Dokument und würden die Monatszahlen sonst verzerren). */
 async function loadMonthFacets() {
-  if (!workspaceId.value) return;
+  if (!wikiId.value) return;
   try {
     const res = await axios.get(
-      `/api/v1/wiki/${workspaceId.value}/facets/months`,
+      `/api/v1/pages/${wikiId.value}/facets/months`,
       { params: { page_type: activeTab.value } },
     );
     monthFacets.value = res.data.months || [];
@@ -1060,10 +1060,10 @@ async function loadMonthFacets() {
 }
 
 async function loadFlagFacets() {
-  if (!workspaceId.value) return;
+  if (!wikiId.value) return;
   try {
     const res = await axios.get(
-      `/api/v1/wiki/${workspaceId.value}/facets/flags`,
+      `/api/v1/pages/${wikiId.value}/facets/flags`,
     );
     flagFacets.value = res.data.flags || [];
   } catch {
@@ -1072,11 +1072,11 @@ async function loadFlagFacets() {
 }
 
 async function loadPages() {
-  if (!workspaceId.value) return;
+  if (!wikiId.value) return;
   loading.value = true;
   currentPage.value = 1;
   try {
-    const res = await axios.get(`/api/v1/wiki/${workspaceId.value}/pages`, {
+    const res = await axios.get(`/api/v1/pages/${wikiId.value}/pages`, {
       params: { ...currentFilterParams(), page: "1" },
     });
     pages.value = res.data.pages || [];
@@ -1094,11 +1094,11 @@ async function loadPages() {
  * damit unerreichbar.
  */
 async function loadMore() {
-  if (!workspaceId.value || loadingMore.value) return;
+  if (!wikiId.value || loadingMore.value) return;
   loadingMore.value = true;
   try {
     const next = currentPage.value + 1;
-    const res = await axios.get(`/api/v1/wiki/${workspaceId.value}/pages`, {
+    const res = await axios.get(`/api/v1/pages/${wikiId.value}/pages`, {
       params: { ...currentFilterParams(), page: String(next) },
     });
     const more = res.data.pages || [];
@@ -1247,10 +1247,10 @@ function goBackToOverview() {
 }
 
 async function loadPageBySlug(slug: string) {
-  if (!workspaceId.value) return;
+  if (!wikiId.value) return;
   try {
     const res = await axios.get(
-      `/api/v1/wiki/${workspaceId.value}/pages/${encodeURIComponent(slug)}`,
+      `/api/v1/pages/${wikiId.value}/pages/${encodeURIComponent(slug)}`,
     );
     if (res.data.page) {
       selectedPage.value = res.data.page;
@@ -1285,7 +1285,7 @@ async function saveEdit() {
   saving.value = true;
   try {
     const res = await axios.put(
-      `/api/v1/wiki/${workspaceId.value}/pages/${encodeURIComponent(selectedSlug.value)}`,
+      `/api/v1/pages/${wikiId.value}/pages/${encodeURIComponent(selectedSlug.value)}`,
       {
         title: editTitle.value,
         summary: editSummary.value,
@@ -1324,7 +1324,7 @@ async function openRevisions() {
   showRevisions.value = true;
   try {
     const res = await axios.get(
-      `/api/v1/wiki/${workspaceId.value}/pages/${encodeURIComponent(selectedSlug.value)}/revisions`,
+      `/api/v1/pages/${wikiId.value}/pages/${encodeURIComponent(selectedSlug.value)}/revisions`,
     );
     revisions.value = res.data.revisions || [];
   } catch {
@@ -1335,7 +1335,7 @@ async function restoreRevision(rev: any) {
   restoringId.value = rev.id;
   try {
     const res = await axios.post(
-      `/api/v1/wiki/${workspaceId.value}/pages/${encodeURIComponent(selectedSlug.value)}/revisions/${rev.id}/restore`,
+      `/api/v1/pages/${wikiId.value}/pages/${encodeURIComponent(selectedSlug.value)}/revisions/${rev.id}/restore`,
     );
     if (res.data.page) selectedPage.value = res.data.page;
     showRevisions.value = false;
@@ -1614,7 +1614,7 @@ async function startImport() {
   importError.value = "";
   importResult.value = null;
   try {
-    const res = await axios.post(`/api/v1/wiki/${workspaceId.value}/import`, {
+    const res = await axios.post(`/api/v1/pages/${wikiId.value}/import`, {
       pages: importParsed.value,
     });
     importResult.value = res.data;

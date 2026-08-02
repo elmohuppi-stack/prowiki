@@ -1,23 +1,23 @@
 <template>
   <main class="main-content">
     <div class="header">
-      <h3>📁 Workspaces</h3>
+      <h3>📁 Wikis</h3>
       <button class="btn-primary" @click="showCreate = true">+ Neu</button>
     </div>
 
     <div class="content">
-      <div v-if="loading" class="loading">Lade Workspaces...</div>
+      <div v-if="loading" class="loading">Lade Wikis...</div>
 
-      <div v-else-if="workspaces.length === 0" class="empty">
+      <div v-else-if="wikis.length === 0" class="empty">
         <p>
-          Noch keine Workspaces. Klicke auf <strong>+ Neu</strong> um deinen
+          Noch keine Wikis. Klicke auf <strong>+ Neu</strong> um deinen
           ersten zu erstellen.
         </p>
       </div>
 
       <div v-else class="ws-grid">
         <div
-          v-for="ws in workspaces"
+          v-for="ws in wikis"
           :key="ws.id"
           class="ws-card"
           @click="$router.push('/documents/' + (ws.slug || ws.id))"
@@ -44,7 +44,7 @@
       @click.self="showCreate = false"
     >
       <div class="dialog">
-        <h3>Neuen Workspace erstellen</h3>
+        <h3>Neuen Wiki erstellen</h3>
         <div class="field">
           <label>Name *</label>
           <input v-model="newName" placeholder="z.B. Meine Wissensdatenbank" />
@@ -59,7 +59,7 @@
           </button>
           <button
             class="btn-primary"
-            @click="createWorkspace"
+            @click="createWiki"
             :disabled="!newName.trim()"
           >
             Erstellen
@@ -79,7 +79,7 @@ import axios from "axios";
 
 const auth = useAuthStore();
 const router = useRouter();
-const workspaces = ref<any[]>([]);
+const wikis = ref<any[]>([]);
 const loading = ref(true);
 const showCreate = ref(false);
 const newName = ref("");
@@ -91,28 +91,28 @@ onMounted(async () => {
     router.push("/login");
     return;
   }
-  await loadWorkspaces();
+  await loadWikis();
 });
 
-async function loadWorkspaces() {
+async function loadWikis() {
   try {
-    const res = await axios.get("/api/v1/workspaces");
-    workspaces.value = res.data.workspaces || [];
+    const res = await axios.get("/api/v1/wikis");
+    wikis.value = res.data.wikis || [];
   } catch (e: any) {
-    console.error("Failed to load workspaces", e);
+    console.error("Failed to load wikis", e);
   } finally {
     loading.value = false;
   }
 }
 
-async function createWorkspace() {
+async function createWiki() {
   createError.value = "";
   try {
-    const res = await axios.post("/api/v1/workspaces", {
+    const res = await axios.post("/api/v1/wikis", {
       name: newName.value,
       description: newDesc.value || undefined,
     });
-    workspaces.value.push(res.data.workspace);
+    wikis.value.push(res.data.wiki);
     showCreate.value = false;
     newName.value = "";
     newDesc.value = "";

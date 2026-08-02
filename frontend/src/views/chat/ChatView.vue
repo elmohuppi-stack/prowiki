@@ -62,7 +62,7 @@
           :title="
             canGenerateArticle
               ? 'Artikel-Verbund aus diesem Gespräch erzeugen'
-              : 'Wähle einen Workspace und führe zuerst ein Gespräch'
+              : 'Wähle einen Wiki und führe zuerst ein Gespräch'
           "
           @click="openArticleDialog"
         >
@@ -108,9 +108,9 @@
       </div>
 
       <div class="input-bar">
-        <select v-model="workspaceId" class="ws-select">
-          <option value="">— Alle Workspaces —</option>
-          <option v-for="ws in workspaces" :key="ws.id" :value="ws.id">
+        <select v-model="wikiId" class="ws-select">
+          <option value="">— Alle Wikis —</option>
+          <option v-for="ws in wikis" :key="ws.id" :value="ws.id">
             {{ ws.name }}
           </option>
         </select>
@@ -169,11 +169,11 @@
         </label>
         <label class="fld-check">
           <input type="checkbox" v-model="spec.use_rag" />
-          <span>Workspace-Dokumente als Kontext nutzen (RAG)</span>
+          <span>Wiki-Dokumente als Kontext nutzen (RAG)</span>
         </label>
         <p class="fld-hint">
-          Wenn aktiv, werden vorhandene Dokumente dieses Workspace durchsucht und
-          passende Stellen als Quelle einbezogen. Bei leerem Workspace ohne
+          Wenn aktiv, werden vorhandene Dokumente dieses Wiki durchsucht und
+          passende Stellen als Quelle einbezogen. Bei leerem Wiki ohne
           Wirkung – dann aus lassen.
         </p>
 
@@ -233,8 +233,8 @@ function resetInputHeight() {
   const el = inputRef.value;
   if (el) el.style.height = "auto";
 }
-const workspaceId = ref("");
-const workspaces = ref<any[]>([]);
+const wikiId = ref("");
+const wikis = ref<any[]>([]);
 const isStreaming = ref(false);
 const messagesRef = ref<HTMLDivElement>();
 const sessions = ref<any[]>([]);
@@ -247,25 +247,25 @@ onMounted(() => {
     router.push("/login");
     return;
   }
-  loadWorkspaces();
+  loadWikis();
   loadSessions();
 });
 
-async function loadWorkspaces() {
+async function loadWikis() {
   try {
-    const res = await axios.get("/api/v1/workspaces");
-    workspaces.value = res.data.workspaces;
-    // Zuletzt verwendeten Workspace vorauswählen (analog zum Workspace-Tab)
-    const last = localStorage.getItem("lastWorkspaceId");
-    if (last && workspaces.value.some((w: any) => w.id === last)) {
-      workspaceId.value = last;
+    const res = await axios.get("/api/v1/wikis");
+    wikis.value = res.data.wikis;
+    // Zuletzt verwendeten Wiki vorauswählen (analog zum Wiki-Tab)
+    const last = localStorage.getItem("lastWikiId");
+    if (last && wikis.value.some((w: any) => w.id === last)) {
+      wikiId.value = last;
     }
   } catch {}
 }
 
 // Auswahl im Chat ebenfalls als "zuletzt verwendet" merken
-watch(workspaceId, (v) => {
-  if (v) localStorage.setItem("lastWorkspaceId", v);
+watch(wikiId, (v) => {
+  if (v) localStorage.setItem("lastWikiId", v);
 });
 
 async function loadSessions() {
@@ -304,7 +304,7 @@ async function openSession(s: any) {
   if (isStreaming.value) return;
   historyOpen.value = false;
   sessionId.value = s.id;
-  if (s.workspace_id) workspaceId.value = s.workspace_id;
+  if (s.wiki_id) wikiId.value = s.wiki_id;
   try {
     const res = await axios.get(`/api/v1/chat/sessions/${s.id}/messages`);
     messages.value = (res.data.messages || []).map((m: any) => ({
@@ -380,12 +380,15 @@ async function sendMessage() {
   try {
     const res = await fetch("/api/v1/chat/stream", {
       method: "POST",
+      // fetch() schickt Cookies standardmässig NICHT mit — anders als axios,
+      // wo withCredentials global gesetzt ist. Ohne diese Zeile käme der
+      // Stream-Request anonym an.
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
-        ...(auth.token ? { Authorization: `Bearer ${auth.token}` } : {}),
       },
       body: JSON.stringify({
-        workspace_id: workspaceId.value || undefined,
+        wiki_id: wikiId.value || undefined,
         message: query,
         session_id: sessionId.value || undefined,
       }),
@@ -447,9 +450,9 @@ const spec = ref<{
   use_rag: false,
 });
 
-// Nur möglich, wenn ein Workspace gewählt ist und ein Gespräch existiert.
+// Nur möglich, wenn ein Wiki gewählt ist und ein Gespräch existiert.
 const canGenerateArticle = computed(
-  () => !!workspaceId.value && !!sessionId.value && messages.value.length > 0,
+  () => !!wikiId.value && !!sessionId.value && messages.value.length > 0,
 );
 
 function openArticleDialog() {
@@ -461,7 +464,7 @@ async function generateArticleCluster() {
   if (!canGenerateArticle.value || generating.value) return;
   generating.value = true;
   try {
-    const res = await axios.post(`/api/v1/wiki/${workspaceId.value}/from-chat`, {
+    const res = await axios.post(`/api/v1/pages/${wikiId.value}/from-chat`, {
       session_id: sessionId.value,
       audience: spec.value.audience || undefined,
       style: spec.value.style || undefined,
@@ -472,7 +475,7 @@ async function generateArticleCluster() {
     });
     const clusterId = res.data.cluster_id;
     articleDialog.value = false;
-    router.push(`/workspaces/${workspaceId.value}/wiki-review/${clusterId}`);
+    router.push(`/wikis/${wikiId.value}/wiki-review/${clusterId}`);
   } catch (e: any) {
     alert("Fehler beim Starten der Generierung: " + (e?.message || e));
   } finally {

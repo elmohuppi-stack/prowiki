@@ -71,7 +71,7 @@ app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 app.use("/api/v1/*", sessionMiddleware);
 
 app.route("/api/v1/wikis", wikisRouter);
-app.route("/api/v1/users", userRouter);
+app.route("/api/v1/orgs", userRouter);
 app.route("/api/v1/orgs", modelRouter);
 app.route("/api/v1/documents", documentRouter);
 app.route("/api/v1/search", searchRouter);

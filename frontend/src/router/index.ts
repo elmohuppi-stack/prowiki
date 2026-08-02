@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
+import { useAuthStore } from "../stores/auth";
 
 const router = createRouter({
   history: createWebHistory(),
@@ -18,86 +19,75 @@ const router = createRouter({
       component: () => import("../views/chat/ChatView.vue"),
       meta: { requiresAuth: true },
     },
-    // --- Workspace Hub (Tabs: Documents, Wiki, Graph) ---
+    // --- Wiki Hub (Tabs: Documents, Wiki, Graph) ---
     {
-      path: "/workspaces",
-      name: "Workspaces",
-      component: () => import("../views/workspace/WorkspaceList.vue"),
+      path: "/wikis",
+      name: "Wikis",
+      component: () => import("../views/wiki-admin/WikiList.vue"),
       meta: { requiresAuth: true },
     },
     {
-      path: "/workspaces/:id",
-      component: () => import("../views/workspace/WorkspaceHub.vue"),
+      path: "/wikis/:id",
+      component: () => import("../views/wiki-admin/WikiHub.vue"),
       meta: { requiresAuth: true },
-      redirect: (to) => ({ path: `/workspaces/${to.params.id}/documents` }),
+      redirect: (to) => ({ path: `/wikis/${to.params.id}/documents` }),
       children: [
         {
           path: "documents",
-          name: "WorkspaceDocuments",
+          name: "WikiDocuments",
           component: () => import("../views/documents/DocumentList.vue"),
         },
         {
           path: "documents/:documentId",
-          name: "WorkspaceDocumentDetail",
+          name: "WikiDocumentDetail",
           component: () => import("../views/documents/DocumentDetail.vue"),
         },
         {
           path: "wiki",
-          name: "WorkspaceWiki",
+          name: "WikiWiki",
           component: () => import("../views/wiki/WikiBrowser.vue"),
         },
         {
           // Review eines aus dem Chat erzeugten Artikel-Verbunds (Entwürfe).
           path: "wiki-review/:clusterId",
-          name: "WorkspaceWikiReview",
+          name: "WikiWikiReview",
           component: () => import("../views/wiki/WikiClusterReview.vue"),
         },
         {
           path: "wiki/:slug(.*)",
-          name: "WorkspaceWikiPage",
+          name: "WikiWikiPage",
           component: () => import("../views/wiki/WikiBrowser.vue"),
         },
         {
           path: "graph",
-          name: "WorkspaceGraph",
+          name: "WikiGraph",
           component: () => import("../views/wiki/GraphView.vue"),
         },
       ],
     },
     // --- Alte Pfade (Redirects) ---
     {
-      path: "/wiki/:workspaceId?",
+      path: "/wiki/:wikiId?",
       redirect: (to) => {
-        if (to.params.workspaceId) {
-          return `/workspaces/${to.params.workspaceId}/wiki`;
+        if (to.params.wikiId) {
+          return `/wikis/${to.params.wikiId}/wiki`;
         }
-        return "/workspaces";
+        return "/wikis";
       },
     },
     {
-      path: "/wiki/:workspaceId/:slug",
+      path: "/wiki/:wikiId/:slug",
       redirect: (to) =>
-        `/workspaces/${to.params.workspaceId}/wiki/${to.params.slug}`,
+        `/wikis/${to.params.wikiId}/wiki/${to.params.slug}`,
     },
     {
-      path: "/documents/:workspaceId",
-      redirect: (to) => `/workspaces/${to.params.workspaceId}/documents`,
+      path: "/documents/:wikiId",
+      redirect: (to) => `/wikis/${to.params.wikiId}/documents`,
     },
     {
-      path: "/documents/:workspaceId/:documentId",
+      path: "/documents/:wikiId/:documentId",
       redirect: (to) =>
-        `/workspaces/${to.params.workspaceId}/documents/${to.params.documentId}`,
-    },
-    // --- Einstellungen ---
-    {
-      path: "/admin",
-      redirect: "/settings",
-    },
-    {
-      path: "/settings",
-      name: "Settings",
-      component: () => import("../views/admin/AdminPanel.vue"),
-      meta: { requiresAuth: true, requiresAdmin: true },
+        `/wikis/${to.params.wikiId}/documents/${to.params.documentId}`,
     },
   ],
 });
@@ -128,24 +118,29 @@ router.afterEach((to) => {
   sessionStorage.removeItem("chunk-reload:" + to.fullPath);
 });
 
-// Navigation guard
-router.beforeEach((to, from, next) => {
-  const token = localStorage.getItem("token");
-  if (to.meta.requiresAuth && !token) {
-    next({ name: "Login" });
-    return;
+/**
+ * Navigation guard.
+ *
+ * knora las hier `localStorage.getItem("token")` und eine Rolle aus dem
+ * localStorage. Beides gibt es nicht mehr: die Sitzung steckt in einem
+ * httpOnly-Cookie, das JavaScript nicht lesen kann. Gefragt wird deshalb der
+ * Store, der die Sitzung einmalig beim Start vom Server holt.
+ *
+ * Der Guard ist reine Oberflächenführung. Durchgesetzt wird der Zugriff im
+ * Backend über die Capability-Prüfung — ein Guard, den man im Browser
+ * abschalten kann, ist keine Sicherung.
+ */
+router.beforeEach(async (to) => {
+  const auth = useAuthStore();
+  if (auth.loading) await auth.refresh();
+
+  if (to.meta.requiresAuth && !auth.isAuthenticated) {
+    return { name: "Login", query: { redirect: to.fullPath } };
   }
-  // Rollen-Check nur als UI-Führung – durchgesetzt wird er im Backend
-  // (requireRole in admin/model-Router).
-  if (to.meta.requiresAdmin) {
-    const raw = localStorage.getItem("user");
-    const role = raw ? JSON.parse(raw)?.role : null;
-    if (role !== "admin") {
-      next({ path: "/chat" });
-      return;
-    }
+  if (to.name === "Login" && auth.isAuthenticated) {
+    return { path: "/chat" };
   }
-  next();
+  return true;
 });
 
 export default router;

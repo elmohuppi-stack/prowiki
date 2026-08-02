@@ -1,6 +1,6 @@
 <template>
   <select
-    class="workspace-select"
+    class="wiki-select"
     :value="modelValue"
     :disabled="loading || options.length === 0"
     @change="onChange"
@@ -16,7 +16,7 @@
 import { computed, onMounted, ref } from "vue";
 import axios from "axios";
 
-interface Workspace {
+interface Wiki {
   id: string;
   name: string;
   slug?: string;
@@ -27,9 +27,9 @@ interface Workspace {
 const props = withDefaults(
   defineProps<{
     modelValue: string;
-    /** Nur Workspaces anzeigen, in denen der User schreiben darf. */
+    /** Nur Wikis anzeigen, in denen der User schreiben darf. */
     writableOnly?: boolean;
-    /** Diese ID aus der Liste ausschließen (z.B. der aktuelle Workspace). */
+    /** Diese ID aus der Liste ausschließen (z.B. der aktuelle Wiki). */
     exclude?: string;
     placeholder?: string;
     emptyLabel?: string;
@@ -37,17 +37,17 @@ const props = withDefaults(
   {
     writableOnly: false,
     exclude: "",
-    placeholder: "Workspace wählen…",
-    emptyLabel: "Kein anderer Workspace verfügbar",
+    placeholder: "Wiki wählen…",
+    emptyLabel: "Kein anderer Wiki verfügbar",
   },
 );
 
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
-  (e: "loaded", workspaces: Workspace[]): void;
+  (e: "loaded", wikis: Wiki[]): void;
 }>();
 
-const all = ref<Workspace[]>([]);
+const all = ref<Wiki[]>([]);
 const loading = ref(false);
 
 const options = computed(() =>
@@ -73,8 +73,8 @@ function onChange(e: Event) {
 async function load() {
   loading.value = true;
   try {
-    const res = await axios.get("/api/v1/workspaces");
-    all.value = res.data.workspaces || [];
+    const res = await axios.get("/api/v1/wikis");
+    all.value = res.data.wikis || [];
     emit("loaded", all.value);
   } catch {
     all.value = [];
@@ -88,7 +88,7 @@ defineExpose({ reload: load });
 </script>
 
 <style scoped>
-.workspace-select {
+.wiki-select {
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--color-border);
   border-radius: 6px;
@@ -97,7 +97,7 @@ defineExpose({ reload: load });
   font-size: 0.9rem;
   min-width: 200px;
 }
-.workspace-select:disabled {
+.wiki-select:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }

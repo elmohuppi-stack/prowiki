@@ -1,7 +1,7 @@
 <template>
   <!-- Dezente, app-weite Log-Leiste am unteren Rand. Nur sichtbar, wenn es
-       einen Workspace-Kontext gibt oder gerade Aktivität läuft. -->
-  <div v-if="workspaceId" class="activity-bar" :class="{ expanded }">
+       einen Wiki-Kontext gibt oder gerade Aktivität läuft. -->
+  <div v-if="wikiId" class="activity-bar" :class="{ expanded }">
     <!-- Kopfzeile: immer sichtbar, klickbar zum Auf-/Zuklappen -->
     <button class="activity-head" @click="expanded = !expanded">
       <span class="activity-status" :class="statusClass">
@@ -22,7 +22,7 @@
     <!-- Aufgeklappt: Liste der letzten Aktivitäten -->
     <div v-if="expanded" class="activity-list">
       <div v-if="activities.length === 0" class="activity-empty">
-        Keine Aktivitäten in diesem Workspace.
+        Keine Aktivitäten in diesem Wiki.
       </div>
       <div
         v-for="a in activities"
@@ -59,11 +59,11 @@ let timer: ReturnType<typeof setInterval> | null = null;
 // der steigenden Flanke (Ruhe → Aktivität) automatisch aufgeklappt wird.
 let wasRunning = false;
 
-// Aktive Workspace-ID aus Route (oder gemerkter letzter Workspace).
-const workspaceId = computed(() => {
+// Aktive Wiki-ID aus Route (oder gemerkter letzter Wiki).
+const wikiId = computed(() => {
   const fromRoute = route.params.id as string | undefined;
   if (fromRoute) return fromRoute;
-  return localStorage.getItem("knora-last-workspace") || "";
+  return localStorage.getItem("knora-last-wiki") || "";
 });
 
 const latest = computed(() => activities.value[0] || null);
@@ -109,11 +109,11 @@ function formatTime(ts: string) {
 }
 
 async function poll() {
-  const ws = workspaceId.value;
+  const ws = wikiId.value;
   if (!ws) return;
   try {
     const res = await axios.get("/api/v1/activity", {
-      params: { workspace_id: ws, limit: 8 },
+      params: { wiki_id: ws, limit: 8 },
     });
     activities.value = res.data.logs || [];
     // Bei *neu* startender Aktivität einmalig aufklappen (steigende Flanke) und
@@ -148,9 +148,9 @@ function ensureSlowPoll() {
   setPoll(10000);
 }
 
-// Poll (neu) starten, sobald sich der Workspace ändert.
+// Poll (neu) starten, sobald sich der Wiki ändert.
 watch(
-  workspaceId,
+  wikiId,
   (ws) => {
     if (ws) {
       poll();

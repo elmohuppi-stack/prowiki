@@ -107,7 +107,7 @@ import axios from "axios";
 const route = useRoute();
 const router = useRouter();
 
-const workspaceId = computed(() => route.params.id as string);
+const wikiId = computed(() => route.params.id as string);
 const clusterId = computed(() => route.params.clusterId as string);
 
 const pages = ref<any[]>([]);
@@ -130,7 +130,7 @@ function isMain(p: any): boolean {
 async function loadPages() {
   try {
     const res = await axios.get(
-      `/api/v1/wiki/${workspaceId.value}/clusters/${clusterId.value}/pages`,
+      `/api/v1/pages/${wikiId.value}/clusters/${clusterId.value}/pages`,
     );
     pages.value = res.data.pages || [];
     const status = res.data.status as string | null;
@@ -166,7 +166,7 @@ function renderContent(content: string): string {
     /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g,
     (_: string, slug: string, text?: string) => {
       const label = text || prettifySlug(slug);
-      return `<a href="/workspaces/${workspaceId.value}/wiki/${encodeURIComponent(slug)}" class="wiki-link">${label}</a>`;
+      return `<a href="/wikis/${wikiId.value}/wiki/${encodeURIComponent(slug)}" class="wiki-link">${label}</a>`;
     },
   );
   return DOMPurify.sanitize(marked.parse(html, { async: false }) as string);
@@ -192,7 +192,7 @@ function backToChat() {
 
 function openInEditor(p: any) {
   router.push(
-    `/workspaces/${workspaceId.value}/wiki/${encodeURIComponent(p.slug)}`,
+    `/wikis/${wikiId.value}/wiki/${encodeURIComponent(p.slug)}`,
   );
 }
 
@@ -201,11 +201,11 @@ async function publish() {
   publishing.value = true;
   try {
     await axios.post(
-      `/api/v1/wiki/${workspaceId.value}/clusters/${clusterId.value}/publish`,
+      `/api/v1/pages/${wikiId.value}/clusters/${clusterId.value}/publish`,
     );
     const main = pages.value.find((p) => isMain(p)) || pages.value[0];
     router.push(
-      `/workspaces/${workspaceId.value}/wiki/${encodeURIComponent(main.slug)}`,
+      `/wikis/${wikiId.value}/wiki/${encodeURIComponent(main.slug)}`,
     );
   } catch (e) {
     publishing.value = false;

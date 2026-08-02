@@ -16,6 +16,10 @@ app.use(router);
 // NICHT zur Login-Seite; gleichzeitig scheitern alle API-Calls still mit 401
 // und die Seite hängt im "Lädt…"-Zustand. Deshalb hier zentral: bei 401 die
 // Session verwerfen und zur Login-Seite navigieren.
+// Sitzung steckt im httpOnly-Cookie — ohne withCredentials schickt der Browser
+// es bei keinem XHR mit, und jede Anfrage wäre anonym.
+axios.defaults.withCredentials = true;
+
 axios.interceptors.response.use(
   (res) => res,
   (error) => {
@@ -24,7 +28,7 @@ axios.interceptors.response.use(
       // Nur reagieren, wenn wir (vermeintlich) eingeloggt waren – so löst der
       // 401 einer fehlgeschlagenen Login-Anfrage keinen Redirect-Loop aus.
       if (auth.isAuthenticated) {
-        auth.logout();
+        void auth.logout();
         if (router.currentRoute.value.name !== "Login") {
           router.push({
             name: "Login",

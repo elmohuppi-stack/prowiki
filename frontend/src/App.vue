@@ -22,14 +22,10 @@
           <i class="pi pi-comments"></i>
           <span>Chat</span>
         </router-link>
-        <a href="/workspaces" class="nav-item" @click.prevent="openWorkspaces">
+        <a href="/wikis" class="nav-item" @click.prevent="openWikis">
           <i class="pi pi-folder"></i>
-          <span>Workspaces</span>
+          <span>Wikis</span>
         </a>
-        <router-link v-if="auth.isAdmin" to="/settings" class="nav-item">
-          <i class="pi pi-cog"></i>
-          <span>Einstellungen</span>
-        </router-link>
       </nav>
       <div class="sidebar-footer">
         <button
@@ -61,18 +57,14 @@
         <span>Chat</span>
       </router-link>
       <a
-        href="/workspaces"
+        href="/wikis"
         class="mobile-nav-item"
-        :class="{ 'router-link-active': isWorkspacesRoute }"
-        @click.prevent="openWorkspaces"
+        :class="{ 'router-link-active': isWikisRoute }"
+        @click.prevent="openWikis"
       >
         <i class="pi pi-folder"></i>
-        <span>Workspaces</span>
+        <span>Wikis</span>
       </a>
-      <router-link v-if="auth.isAdmin" to="/settings" class="mobile-nav-item">
-        <i class="pi pi-cog"></i>
-        <span>Einstellungen</span>
-      </router-link>
       <button class="mobile-nav-item" @click="toggleTheme">
         <i :class="isDark ? 'pi pi-sun' : 'pi pi-moon'"></i>
         <span>{{ isDark ? "Hell" : "Dunkel" }}</span>
@@ -99,23 +91,23 @@ const sidebarCollapsed = ref(
   localStorage.getItem("knora-sidebar") === "collapsed",
 );
 
-const isWorkspacesRoute = computed(() =>
-  route.path.startsWith("/workspaces"),
+const isWikisRoute = computed(() =>
+  route.path.startsWith("/wikis"),
 );
 
-// Zuletzt aktiven Workspace für Direktsprung merken
-const lastWorkspaceId = ref(localStorage.getItem("knora-last-workspace") || "");
+// Zuletzt aktiven Wiki für Direktsprung merken
+const lastWikiId = ref(localStorage.getItem("knora-last-wiki") || "");
 
-watch(lastWorkspaceId, (v) => {
-  if (v) localStorage.setItem("knora-last-workspace", v);
-  else localStorage.removeItem("knora-last-workspace");
+watch(lastWikiId, (v) => {
+  if (v) localStorage.setItem("knora-last-wiki", v);
+  else localStorage.removeItem("knora-last-wiki");
 });
 
-// Wenn wir in einem Workspace-Kontext sind, speichern wir die ID
+// Wenn wir in einem Wiki-Kontext sind, speichern wir die ID
 watch(
   () => route.params.id as string,
   (id) => {
-    if (id) lastWorkspaceId.value = id;
+    if (id) lastWikiId.value = id;
   },
 );
 
@@ -125,8 +117,10 @@ watch(sidebarCollapsed, (v) => {
 
 onMounted(() => {
   applyTheme();
-  // Rolle serverseitig auffrischen – der localStorage-Stand stammt vom Login.
-  auth.fetchMe();
+  // Sitzung und Organisationen vom Server holen. Der Router-Guard tut das
+  // ebenfalls; hier fürs erste Rendern, damit die Navigation nicht kurz
+  // abgemeldet aussieht.
+  void auth.refresh();
 });
 
 watch(isDark, () => {
@@ -145,12 +139,12 @@ function toggleTheme() {
   isDark.value = !isDark.value;
 }
 
-function openWorkspaces() {
-  const lastId = localStorage.getItem("knora-last-workspace");
+function openWikis() {
+  const lastId = localStorage.getItem("knora-last-wiki");
   if (lastId) {
-    router.push(`/workspaces/${lastId}/documents`);
+    router.push(`/wikis/${lastId}/documents`);
   } else {
-    router.push("/workspaces");
+    router.push("/wikis");
   }
 }
 

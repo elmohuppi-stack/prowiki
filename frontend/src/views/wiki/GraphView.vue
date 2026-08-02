@@ -107,19 +107,19 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useAuthStore } from "../../stores/auth";
-import { useWorkspace } from "../../composables/useWorkspace";
+import { useWiki } from "../../composables/useWiki";
 import axios from "axios";
 import * as d3 from "d3";
 
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
-const { resolveWorkspace, isUUID } = useWorkspace();
+const { resolveWiki, isUUID } = useWiki();
 
-const rawWorkspaceId = computed(
-  () => ((route.params.id || route.params.workspaceId) as string) || "",
+const rawWikiId = computed(
+  () => ((route.params.id || route.params.wikiId) as string) || "",
 );
-const workspaceId = ref(rawWorkspaceId.value);
+const wikiId = ref(rawWikiId.value);
 
 const TYPES = [
   { value: "summary", label: "Artikel", color: "#0052d9" },
@@ -160,19 +160,19 @@ onMounted(async () => {
     router.push("/login");
     return;
   }
-  if (rawWorkspaceId.value && !isUUID(rawWorkspaceId.value)) {
-    const resolved = await resolveWorkspace(rawWorkspaceId.value);
-    if (resolved) workspaceId.value = resolved.id;
+  if (rawWikiId.value && !isUUID(rawWikiId.value)) {
+    const resolved = await resolveWiki(rawWikiId.value);
+    if (resolved) wikiId.value = resolved.id;
   }
   await loadGraph();
 });
 
-watch(rawWorkspaceId, async (v) => {
+watch(rawWikiId, async (v) => {
   if (v && !isUUID(v)) {
-    const r = await resolveWorkspace(v);
-    if (r) workspaceId.value = r.id;
+    const r = await resolveWiki(v);
+    if (r) wikiId.value = r.id;
   } else if (v) {
-    workspaceId.value = v;
+    wikiId.value = v;
   }
   loadGraph();
 });
@@ -182,14 +182,14 @@ onBeforeUnmount(() => {
 });
 
 async function loadGraph() {
-  if (!workspaceId.value) return;
+  if (!wikiId.value) return;
   loading.value = true;
   try {
     const params: Record<string, string> = { limit: "150" };
     if (focus.value) params.focus = focus.value;
     if (activeTypes.value.length && activeTypes.value.length < TYPES.length)
       params.types = activeTypes.value.join(",");
-    const res = await axios.get(`/api/v1/wiki/${workspaceId.value}/graph`, {
+    const res = await axios.get(`/api/v1/pages/${wikiId.value}/graph`, {
       params,
     });
     nodes.value = res.data.nodes || [];
@@ -242,7 +242,7 @@ async function openNode(slug: string, title: string) {
   pageDetail.value = null;
   try {
     const res = await axios.get(
-      `/api/v1/wiki/${workspaceId.value}/pages/${encodeURIComponent(slug)}`,
+      `/api/v1/pages/${wikiId.value}/pages/${encodeURIComponent(slug)}`,
     );
     pageDetail.value = res.data.page || null;
   } catch {
@@ -261,7 +261,7 @@ function expandNeighbors() {
 function openInWiki() {
   if (!selectedNode.value) return;
   router.push(
-    `/workspaces/${rawWorkspaceId.value}/wiki/${encodeURIComponent(selectedNode.value.slug)}`,
+    `/wikis/${rawWikiId.value}/wiki/${encodeURIComponent(selectedNode.value.slug)}`,
   );
 }
 function typeLabel(type: string): string {
@@ -318,7 +318,7 @@ function onSearch() {
     }
     try {
       const res = await axios.get(
-        `/api/v1/wiki/${workspaceId.value}/suggestions`,
+        `/api/v1/pages/${wikiId.value}/suggestions`,
         { params: { q } },
       );
       suggestions.value = (res.data.suggestions || []).slice(0, 8);

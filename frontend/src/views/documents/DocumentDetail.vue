@@ -2,7 +2,7 @@
   <main class="main-content">
     <div class="header">
       <router-link
-        :to="'/workspaces/' + workspaceId + '/documents'"
+        :to="'/wikis/' + wikiId + '/documents'"
         class="back-link"
         >← Zurück zur Liste</router-link
       >
@@ -115,8 +115,8 @@
           <div v-for="wp in wikiPages" :key="wp.id" class="wiki-link-item">
             <router-link
               :to="
-                '/workspaces/' +
-                workspaceId +
+                '/wikis/' +
+                wikiId +
                 '/wiki/' +
                 encodeURIComponent(wp.slug)
               "
@@ -151,7 +151,7 @@ import axios from "axios";
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
-const workspaceId = (route.params.id || route.params.workspaceId) as string;
+const wikiId = (route.params.id || route.params.wikiId) as string;
 const documentId = route.params.documentId as string;
 
 const doc = ref<any>(null);
@@ -181,7 +181,7 @@ const allTopics = ref<any[]>([]);
 const docTopicIds = ref<string[]>([]);
 async function loadTopics() {
   try {
-    const r = await axios.get(`/api/v1/topics/${workspaceId}`);
+    const r = await axios.get(`/api/v1/topics/${wikiId}`);
     allTopics.value = r.data.topics || [];
   } catch {
     /* ignore */
@@ -247,7 +247,7 @@ async function loadDoc() {
 
 async function loadWikiPages() {
   try {
-    const res = await axios.get("/api/v1/wiki/" + workspaceId + "/pages", {
+    const res = await axios.get("/api/v1/pages/" + wikiId + "/pages", {
       params: { source_document_id: documentId },
     });
     wikiPages.value = res.data.pages || [];
@@ -261,7 +261,7 @@ async function generateWiki() {
   genResult.value = "";
   try {
     const res = await axios.post(
-      "/api/v1/wiki/" + workspaceId + "/generate/" + documentId,
+      "/api/v1/pages/" + wikiId + "/generate/" + documentId,
     );
     const pages = res.data.pages || [];
     if (pages.length > 0) {

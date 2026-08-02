@@ -1,4 +1,4 @@
-// Composable: Workspace-Auflösung (UUID + Slug)
+// Composable: Wiki-Auflösung (UUID + Slug)
 // Ermöglicht Routen wie /documents/politik oder /documents/a9aa0313-...
 import { ref } from "vue";
 import axios from "axios";
@@ -6,7 +6,7 @@ import axios from "axios";
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function useWorkspace() {
+export function useWiki() {
   const resolving = ref(false);
   const resolveError = ref("");
 
@@ -15,14 +15,14 @@ export function useWorkspace() {
     return UUID_REGEX.test(val);
   }
 
-  /** Löst einen Workspace-Bezeichner (UUID oder Slug) in ein Workspace-Objekt auf */
-  async function resolveWorkspace(
-    workspaceId: string,
+  /** Löst einen Wiki-Bezeichner (UUID oder Slug) in ein Wiki-Objekt auf */
+  async function resolveWiki(
+    wikiId: string,
   ): Promise<{ id: string; name: string; slug: string } | null> {
-    if (isUUID(workspaceId)) {
+    if (isUUID(wikiId)) {
       try {
-        const res = await axios.get(`/api/v1/workspaces/${workspaceId}`);
-        const ws = res.data.workspace;
+        const res = await axios.get(`/api/v1/wikis/${wikiId}`);
+        const ws = res.data.wiki;
         return ws ? { id: ws.id, name: ws.name, slug: ws.slug } : null;
       } catch {
         return null;
@@ -33,17 +33,17 @@ export function useWorkspace() {
     resolving.value = true;
     resolveError.value = "";
     try {
-      const res = await axios.get(`/api/v1/workspaces/by-slug/${workspaceId}`);
-      const ws = res.data.workspace;
+      const res = await axios.get(`/api/v1/wikis/by-slug/${wikiId}`);
+      const ws = res.data.wiki;
       return ws ? { id: ws.id, name: ws.name, slug: ws.slug } : null;
     } catch (e: any) {
       resolveError.value =
-        e.response?.data?.error || `Workspace "${workspaceId}" nicht gefunden`;
+        e.response?.data?.error || `Wiki "${wikiId}" nicht gefunden`;
       return null;
     } finally {
       resolving.value = false;
     }
   }
 
-  return { resolveWorkspace, isUUID, resolving, resolveError };
+  return { resolveWiki, isUUID, resolving, resolveError };
 }

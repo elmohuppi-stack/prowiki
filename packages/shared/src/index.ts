@@ -1,3 +1,4 @@
+export * from "./permissions.js";
 export * from "./types/user.js";
 export * from "./types/workspace.js";
 export * from "./types/document.js";

@@ -2,7 +2,7 @@
   <main class="main-content">
     <div class="header">
       <div class="header-left">
-        <router-link to="/workspaces" class="back-link"
+        <router-link to="/wikis" class="back-link"
           >← Übersicht</router-link
         >
         <h3 v-if="ws">{{ ws.name }}</h3>
@@ -12,7 +12,7 @@
         <button
           class="btn-icon"
           @click="showSettings = true"
-          title="Workspace-Einstellungen"
+          title="Wiki-Einstellungen"
         >
           ⚙️
         </button>
@@ -212,7 +212,7 @@
               <button
                 class="btn-icon-sm"
                 @click.stop="openMove(doc)"
-                title="In anderen Workspace verschieben"
+                title="In anderen Wiki verschieben"
               >
                 📦
               </button>
@@ -266,14 +266,14 @@
       </div>
     </div>
 
-    <!-- Workspace Settings Dialog -->
+    <!-- Wiki Settings Dialog -->
     <div
       v-if="showSettings && ws"
       class="dialog-overlay"
       @click.self="showSettings = false"
     >
       <div class="dialog">
-        <h3>⚙️ Workspace: {{ ws.name }}</h3>
+        <h3>⚙️ Wiki: {{ ws.name }}</h3>
 
         <div class="field">
           <label>Name</label>
@@ -302,19 +302,10 @@
         <!-- Zugriff: Besitzer + Mitglieder -->
         <div class="field">
           <label>Besitzer</label>
-          <select
-            v-if="auth.isAdmin"
-            v-model="editOwnerId"
-            class="access-select"
-          >
-            <option v-for="u in allUsers" :key="u.id" :value="u.id">
-              {{ u.name }} ({{ u.email }})
-            </option>
-          </select>
-          <p v-else class="field-static">{{ ownerLabel }}</p>
-          <p v-if="auth.isAdmin" class="field-hint">
-            Beim Wechsel bleibt der bisherige Besitzer als Bearbeiter im
-            Workspace.
+          <p class="field-static">{{ ownerLabel }}</p>
+          <p class="field-hint">
+            Der Besitz liegt bei der Organisation, nicht beim einzelnen Wiki —
+            er wird in den Organisationseinstellungen übertragen.
           </p>
         </div>
 
@@ -470,13 +461,13 @@
         <p class="move-doc-title">{{ moveDoc.title }}</p>
 
         <div class="field">
-          <label>Ziel-Workspace</label>
-          <WorkspaceSelect
+          <label>Ziel-Wiki</label>
+          <WikiSelect
             v-model="moveTarget"
             writable-only
-            :exclude="workspaceId"
+            :exclude="wikiId"
             placeholder="Ziel wählen…"
-            empty-label="Kein anderer Workspace mit Schreibrecht"
+            empty-label="Kein anderer Wiki mit Schreibrecht"
           />
         </div>
 
@@ -498,7 +489,7 @@
             <li v-if="movePreview.staying_pages.length">
               <strong>{{ movePreview.staying_pages.length }}</strong>
               Entity-/Concept-Seiten bleiben in „{{
-                movePreview.source_workspace.name
+                movePreview.source_wiki.name
               }}“ – sie werden von mehreren Dokumenten geteilt
             </li>
             <li v-if="movePreview.dead_links.length">
@@ -548,17 +539,17 @@
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useAuthStore } from "../../stores/auth";
-import { useWorkspace } from "../../composables/useWorkspace";
+import { useWiki } from "../../composables/useWiki";
 import { useConfirm } from "../../composables/useConfirm";
 import ConfirmModal from "../../components/ConfirmModal.vue";
-import WorkspaceSelect from "../../components/WorkspaceSelect.vue";
+import WikiSelect from "../../components/WikiSelect.vue";
 import DatePicker from "primevue/datepicker";
 import axios from "axios";
 
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
-const { resolveWorkspace, isUUID, resolving } = useWorkspace();
+const { resolveWiki, isUUID, resolving } = useWiki();
 const {
   show: showConfirm,
   options: confirmOptions,
@@ -567,8 +558,8 @@ const {
   onCancel,
 } = useConfirm();
 
-const rawWorkspaceId = (route.params.id || route.params.workspaceId) as string;
-const workspaceId = ref(rawWorkspaceId);
+const rawWikiId = (route.params.id || route.params.wikiId) as string;
+const wikiId = ref(rawWikiId);
 
 const docs = ref<any[]>([]);
 const ws = ref<any>(null);
@@ -668,9 +659,9 @@ function clearFilters() {
 
 // ---- Themen (Ebene 1) ----
 async function loadTopics() {
-  if (!workspaceId.value) return;
+  if (!wikiId.value) return;
   try {
-    const res = await axios.get(`/api/v1/topics/${workspaceId.value}`);
+    const res = await axios.get(`/api/v1/topics/${wikiId.value}`);
     topics.value = res.data.topics || [];
   } catch {
     /* ignore */
@@ -687,7 +678,7 @@ async function addTopic() {
   if (!label) return;
   topicError.value = "";
   try {
-    await axios.post(`/api/v1/topics/${workspaceId.value}`, { label });
+    await axios.post(`/api/v1/topics/${wikiId.value}`, { label });
     newTopicLabel.value = "";
     await loadTopics();
   } catch (e: any) {
@@ -699,11 +690,11 @@ async function generateSuggestions() {
   topicError.value = "";
   suggestions.value = [];
   try {
-    const res = await axios.post(`/api/v1/topics/${workspaceId.value}/suggest`);
+    const res = await axios.post(`/api/v1/topics/${wikiId.value}/suggest`);
     suggestions.value = res.data.suggestions || [];
     if (!suggestions.value.length)
       topicError.value =
-        "Keine Vorschläge – gibt es schon Wiki-Konzepte in diesem Workspace?";
+        "Keine Vorschläge – gibt es schon Wiki-Konzepte in diesem Wiki?";
   } catch (e: any) {
     topicError.value = e.response?.data?.error || e.message;
   } finally {
@@ -714,7 +705,7 @@ async function acceptSuggestions() {
   const existing = new Set(topics.value.map((t: any) => t.slug));
   const toAdd = suggestions.value.filter((s: any) => !existing.has(s.slug));
   if (toAdd.length) {
-    await axios.post(`/api/v1/topics/${workspaceId.value}/bulk`, {
+    await axios.post(`/api/v1/topics/${wikiId.value}/bulk`, {
       topics: toAdd.map((s: any) => ({
         label: s.label,
         description: s.description,
@@ -731,7 +722,7 @@ async function removeTopic(id: string) {
     confirmText: "Löschen",
   });
   if (!ok) return;
-  await axios.delete(`/api/v1/topics/${workspaceId.value}/${id}`);
+  await axios.delete(`/api/v1/topics/${wikiId.value}/${id}`);
   filterTopicIds.value = filterTopicIds.value.filter((x) => x !== id);
   await loadTopics();
 }
@@ -739,7 +730,7 @@ async function removeTopic(id: string) {
 async function loadChannels() {
   try {
     const res = await axios.get(
-      `/api/v1/documents/${workspaceId.value}/channels`,
+      `/api/v1/documents/${wikiId.value}/channels`,
     );
     channels.value = res.data.channels || [];
   } catch {
@@ -766,7 +757,7 @@ async function refreshMetadata(doc: any) {
   }
 }
 
-// Workspace settings
+// Wiki settings
 const showSettings = ref(false);
 const editName = ref("");
 const editDesc = ref("");
@@ -809,7 +800,7 @@ function startActivityPoll() {
   activityTimer = setInterval(async () => {
     try {
       const res = await axios.get("/api/v1/activity", {
-        params: { workspace_id: workspaceId.value, limit: 5 },
+        params: { wiki_id: wikiId.value, limit: 5 },
       });
       const logs = (res.data.logs || []).slice(0, 5);
       const hasRunning = logs.some(
@@ -837,7 +828,7 @@ function stopActivityPoll() {
 }
 
 function openDoc(doc: any) {
-  router.push(`/workspaces/${workspaceId.value}/documents/${doc.id}`);
+  router.push(`/wikis/${wikiId.value}/documents/${doc.id}`);
 }
 
 async function generateWithConfirm(docId: string) {
@@ -856,7 +847,7 @@ async function generateWikiForDoc(docId: string, silent = false) {
   if (!silent) wikiGenResult.value = "";
   try {
     const res = await axios.post(
-      `/api/v1/wiki/${workspaceId.value}/generate/${docId}`,
+      `/api/v1/pages/${wikiId.value}/generate/${docId}`,
     );
     const pages = res.data.pages || [];
     if (pages.length > 0) {
@@ -878,29 +869,29 @@ onMounted(async () => {
     router.push("/login");
     return;
   }
-  if (!rawWorkspaceId) {
-    router.push("/workspaces");
+  if (!rawWikiId) {
+    router.push("/wikis");
     return;
   }
 
   // Slug auflösen falls nötig
-  if (!isUUID(rawWorkspaceId)) {
-    const resolved = await resolveWorkspace(rawWorkspaceId);
+  if (!isUUID(rawWikiId)) {
+    const resolved = await resolveWiki(rawWikiId);
     if (!resolved) {
-      router.push("/workspaces");
+      router.push("/wikis");
       return;
     }
-    workspaceId.value = resolved.id;
+    wikiId.value = resolved.id;
   }
 
-  // Zuletzt verwendeten Workspace merken (für Chat-Default)
-  if (workspaceId.value) {
-    localStorage.setItem("lastWorkspaceId", workspaceId.value);
+  // Zuletzt verwendeten Wiki merken (für Chat-Default)
+  if (wikiId.value) {
+    localStorage.setItem("lastWikiId", wikiId.value);
   }
 
   await Promise.all([
     loadDocs(),
-    loadWorkspace(),
+    loadWiki(),
     loadChannels(),
     loadTopics(),
   ]);
@@ -911,17 +902,17 @@ onUnmounted(() => {
   stopActivityPoll();
 });
 
-async function loadWorkspace() {
+async function loadWiki() {
   try {
-    const res = await axios.get(`/api/v1/workspaces/${workspaceId.value}`);
-    ws.value = res.data.workspace;
+    const res = await axios.get(`/api/v1/wikis/${wikiId.value}`);
+    ws.value = res.data.wiki;
     editName.value = ws.value.name;
     editDesc.value = ws.value.description || "";
     // Sinnvolle Vorbelegung: gespeicherter Wert, sonst "capped".
     editWikiDepth.value = ws.value.wiki_config?.wiki_depth || "capped";
     editOwnerId.value = ws.value.created_by;
   } catch (e: any) {
-    console.error("Failed to load workspace", e);
+    console.error("Failed to load wiki", e);
   }
 }
 
@@ -938,10 +929,9 @@ const ownerLabel = computed(() => {
   return owner ? `${owner.name} (${owner.email})` : "—";
 });
 
-// Mitglieder verwalten darf der Besitzer (und jeder globale Admin).
-const canManageMembers = computed(
-  () => auth.isAdmin || ws.value?.created_by === auth.user?.id,
-);
+// Wiki-Overrides verwalten darf, wer in der Organisation Mitglieder verwalten
+// darf. Eine globale Admin-Rolle, an der das in knora hing, gibt es nicht mehr.
+const canManageMembers = computed(() => auth.can("member.update"));
 
 const invitableUsers = computed(() =>
   allUsers.value.filter(
@@ -961,8 +951,8 @@ async function loadAccess() {
   memberError.value = "";
   try {
     const [usersRes, membersRes] = await Promise.all([
-      axios.get("/api/v1/users"),
-      axios.get(`/api/v1/workspaces/${workspaceId.value}/members`),
+      axios.get(`/api/v1/orgs/${auth.activeOrgId}/users`),
+      axios.get(`/api/v1/wikis/${wikiId.value}/members`),
     ]);
     allUsers.value = usersRes.data.users || [];
     members.value = membersRes.data.members || [];
@@ -975,7 +965,7 @@ async function addMember() {
   if (!newMemberId.value) return;
   memberError.value = "";
   try {
-    await axios.post(`/api/v1/workspaces/${workspaceId.value}/members`, {
+    await axios.post(`/api/v1/wikis/${wikiId.value}/members`, {
       user_id: Number(newMemberId.value),
       role: newMemberRole.value,
     });
@@ -990,7 +980,7 @@ async function removeMember(userId: number) {
   memberError.value = "";
   try {
     await axios.delete(
-      `/api/v1/workspaces/${workspaceId.value}/members/${userId}`,
+      `/api/v1/wikis/${wikiId.value}/members/${userId}`,
     );
     await loadAccess();
   } catch (e: any) {
@@ -1001,22 +991,12 @@ async function removeMember(userId: number) {
 async function updateWs() {
   settingsError.value = "";
   try {
-    // Besitzerwechsel ist eine eigene, Admin-geschützte Route.
-    if (
-      auth.isAdmin &&
-      editOwnerId.value &&
-      editOwnerId.value !== ws.value.created_by
-    ) {
-      await axios.put(`/api/v1/workspaces/${workspaceId.value}/owner`, {
-        user_id: Number(editOwnerId.value),
-      });
-    }
-    const res = await axios.put(`/api/v1/workspaces/${workspaceId.value}`, {
+    const res = await axios.put(`/api/v1/wikis/${wikiId.value}`, {
       name: editName.value,
       description: editDesc.value || undefined,
       wiki_depth: editWikiDepth.value,
     });
-    ws.value = res.data.workspace;
+    ws.value = res.data.wiki;
     showSettings.value = false;
   } catch (e: any) {
     settingsError.value = e.response?.data?.error || "Fehler beim Speichern";
@@ -1070,7 +1050,7 @@ async function confirmMove() {
   moveError.value = "";
   try {
     await axios.post(`/api/v1/documents/${moveDoc.value.id}/move`, {
-      target_workspace_id: moveTarget.value,
+      target_wiki_id: moveTarget.value,
     });
     closeMove();
     await loadDocs();
@@ -1083,14 +1063,14 @@ async function confirmMove() {
 
 async function deleteWs() {
   const ok = await askConfirm({
-    title: "Workspace löschen",
-    message: `Soll der Workspace „${ws.value?.name}” wirklich gelöscht werden? Alle Dokumente und Wiki-Seiten werden entfernt.`,
+    title: "Wiki löschen",
+    message: `Soll der Wiki „${ws.value?.name}” wirklich gelöscht werden? Alle Dokumente und Wiki-Seiten werden entfernt.`,
     confirmText: "Endgültig löschen",
   });
   if (!ok) return;
   try {
-    await axios.delete(`/api/v1/workspaces/${workspaceId.value}`);
-    router.push("/workspaces");
+    await axios.delete(`/api/v1/wikis/${wikiId.value}`);
+    router.push("/wikis");
   } catch (e: any) {
     settingsError.value =
       "Fehler beim Löschen: " + (e.response?.data?.error || e.message);
@@ -1109,7 +1089,7 @@ async function loadDocs() {
     if (to) params.to = `${toDateStr(to)}T23:59:59`;
     if (filterTopicIds.value.length) params.topics = filterTopicIds.value.join(",");
     if (sortBy.value) params.sort = sortBy.value;
-    const res = await axios.get(`/api/v1/documents/${workspaceId.value}`, {
+    const res = await axios.get(`/api/v1/documents/${wikiId.value}`, {
       params,
     });
     docs.value = res.data.documents || [];
@@ -1130,7 +1110,7 @@ async function uploadFile(e: Event) {
   try {
     const form = new FormData();
     form.append("file", file);
-    await axios.post(`/api/v1/documents/upload/${workspaceId.value}`, form, {
+    await axios.post(`/api/v1/documents/upload/${wikiId.value}`, form, {
       headers: { "Content-Type": "multipart/form-data" },
     });
     showUpload.value = false;
@@ -1148,7 +1128,7 @@ async function importUrl() {
   urlError.value = "";
   try {
     await axios.post("/api/v1/documents/import-url", {
-      workspace_id: workspaceId.value,
+      wiki_id: wikiId.value,
       url: urlInput.value,
     });
     showUrl.value = false;
@@ -1168,7 +1148,7 @@ async function importYoutube() {
   youtubeInfo.value = "";
   try {
     const res = await axios.post("/api/v1/documents/import-youtube", {
-      workspace_id: workspaceId.value,
+      wiki_id: wikiId.value,
       url: youtubeUrl.value,
     });
     youtubeInfo.value = `✅ ${res.data.document.title}`;

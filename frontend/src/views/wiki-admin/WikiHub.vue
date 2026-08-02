@@ -1,20 +1,20 @@
 <template>
   <main class="hub-layout">
-    <!-- Workspace Header -->
+    <!-- Wiki Header -->
     <div class="hub-header">
       <div class="hub-header-left">
-        <router-link to="/workspaces" class="back-link"
+        <router-link to="/wikis" class="back-link"
           >← Übersicht</router-link
         >
         <h3>{{ ws?.name || "Lädt..." }}</h3>
       </div>
       <div class="hub-header-actions">
         <select
-          v-model="selectedWorkspaceId"
-          @change="switchWorkspace"
+          v-model="selectedWikiId"
+          @change="switchWiki"
           class="ws-switch"
         >
-          <option v-for="w in allWorkspaces" :key="w.id" :value="w.id">
+          <option v-for="w in allWikis" :key="w.id" :value="w.id">
             {{ w.name }}
           </option>
         </select>
@@ -24,19 +24,19 @@
     <!-- Tab Bar -->
     <div class="hub-tabs">
       <router-link
-        :to="`/workspaces/${workspaceId}/documents`"
+        :to="`/wikis/${wikiId}/documents`"
         class="tab"
         :class="{ active: activeTab === 'documents' }"
         >📄 Dokumente</router-link
       >
       <router-link
-        :to="`/workspaces/${workspaceId}/wiki`"
+        :to="`/wikis/${wikiId}/wiki`"
         class="tab"
         :class="{ active: activeTab === 'wiki' }"
         >📖 Wiki</router-link
       >
       <router-link
-        :to="`/workspaces/${workspaceId}/graph`"
+        :to="`/wikis/${wikiId}/graph`"
         class="tab"
         :class="{ active: activeTab === 'graph' }"
         >🕸️ Graph</router-link
@@ -62,14 +62,14 @@ import { ref, onMounted, computed } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useAuthStore } from "../../stores/auth";
 import { useConfirm } from "../../composables/useConfirm";
-import { useWorkspace } from "../../composables/useWorkspace";
+import { useWiki } from "../../composables/useWiki";
 import ConfirmModal from "../../components/ConfirmModal.vue";
 import axios from "axios";
 
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
-const { isUUID } = useWorkspace();
+const { isUUID } = useWiki();
 const {
   show: showConfirm,
   options: confirmOptions,
@@ -78,7 +78,7 @@ const {
   onCancel,
 } = useConfirm();
 
-const workspaceId = computed(() => route.params.id as string);
+const wikiId = computed(() => route.params.id as string);
 const activeTab = computed(() => {
   const path = route.path;
   if (path.includes("/documents")) return "documents";
@@ -88,58 +88,54 @@ const activeTab = computed(() => {
 });
 
 const ws = ref<any>(null);
-const allWorkspaces = ref<any[]>([]);
-const selectedWorkspaceId = ref("");
+const allWikis = ref<any[]>([]);
+const selectedWikiId = ref("");
 
 onMounted(async () => {
-  await Promise.all([loadCurrentWorkspace(), loadAllWorkspaces()]);
+  await Promise.all([loadCurrentWiki(), loadAllWikis()]);
 });
 
-async function loadCurrentWorkspace() {
+async function loadCurrentWiki() {
   try {
     // Der Route-Parameter kann eine UUID oder ein Slug sein (z.B. "politik").
     // Für Slugs den by-slug-Endpoint nutzen, sonst liefert /:id einen 404.
-    const url = isUUID(workspaceId.value)
-      ? `/api/v1/workspaces/${workspaceId.value}`
-      : `/api/v1/workspaces/by-slug/${workspaceId.value}`;
-    const res = await axios.get(url, {
-      headers: { Authorization: `Bearer ${auth.token}` },
-    });
-    const data = res.data.workspace;
+    const url = isUUID(wikiId.value)
+      ? `/api/v1/wikis/${wikiId.value}`
+      : `/api/v1/wikis/by-slug/${wikiId.value}`;
+    const res = await axios.get(url);
+    const data = res.data.wiki;
     ws.value = data;
     // Dropdown-Auswahl auf die aufgelöste UUID setzen, damit sie in der Liste matcht.
-    selectedWorkspaceId.value = data.id;
+    selectedWikiId.value = data.id;
   } catch (e: any) {
-    console.error("[hub] Fehler beim Laden des Workspace:", e.message);
+    console.error("[hub] Fehler beim Laden des Wiki:", e.message);
   }
 }
 
-async function loadAllWorkspaces() {
+async function loadAllWikis() {
   try {
-    const res = await axios.get("/api/v1/workspaces", {
-      headers: { Authorization: `Bearer ${auth.token}` },
-    });
-    allWorkspaces.value = res.data.workspaces || [];
-    // Nur setzen, wenn loadCurrentWorkspace die UUID noch nicht aufgelöst hat.
-    // Bei Slug-URLs matcht workspaceId sonst keinen Listeneintrag (Dropdown bliebe leer).
-    if (!selectedWorkspaceId.value) {
-      const match = allWorkspaces.value.find(
-        (w: any) => w.id === workspaceId.value || w.slug === workspaceId.value,
+    const res = await axios.get("/api/v1/wikis");
+    allWikis.value = res.data.wikis || [];
+    // Nur setzen, wenn loadCurrentWiki die UUID noch nicht aufgelöst hat.
+    // Bei Slug-URLs matcht wikiId sonst keinen Listeneintrag (Dropdown bliebe leer).
+    if (!selectedWikiId.value) {
+      const match = allWikis.value.find(
+        (w: any) => w.id === wikiId.value || w.slug === wikiId.value,
       );
-      selectedWorkspaceId.value = match?.id || workspaceId.value;
+      selectedWikiId.value = match?.id || wikiId.value;
     }
   } catch (e: any) {
-    console.error("[hub] Fehler beim Laden der Workspace-Liste:", e.message);
+    console.error("[hub] Fehler beim Laden der Wiki-Liste:", e.message);
   }
 }
 
-function switchWorkspace() {
+function switchWiki() {
   if (
-    selectedWorkspaceId.value &&
-    selectedWorkspaceId.value !== workspaceId.value
+    selectedWikiId.value &&
+    selectedWikiId.value !== wikiId.value
   ) {
-    localStorage.setItem("knora-last-workspace", selectedWorkspaceId.value);
-    router.push(`/workspaces/${selectedWorkspaceId.value}/documents`);
+    localStorage.setItem("knora-last-wiki", selectedWikiId.value);
+    router.push(`/wikis/${selectedWikiId.value}/documents`);
   }
 }
 
@@ -239,7 +235,7 @@ function switchWorkspace() {
 }
 
 @media (max-width: 768px) {
-  /* Alles in EINER Zeile: "← Übersicht" + Workspace-Select. Der h3-Titel ist
+  /* Alles in EINER Zeile: "← Übersicht" + Wiki-Select. Der h3-Titel ist
      mit der Select-Box redundant (zeigt denselben Namen) und wird ausgeblendet,
      um oben Platz für die Inhalte zu sparen. */
   .hub-header {
