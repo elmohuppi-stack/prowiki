@@ -1,0 +1,161 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    # Kein Host-Port nötig: Das Frontend (nginx) proxied /api/ intern zu app:3000
+    # über das appnet-Netzwerk. Ein Host-Mapping würde mit FRONTEND_PORT kollidieren,
+    # wenn WEB_PORT == FRONTEND_PORT gesetzt ist.
+    # ports:
+    #   - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    environment:
+      # Pflichtvariablen mit :? statt :- – ein fehlender Wert bricht den Start ab,
+      # statt still auf einen Default zurückzufallen. Mit `${JWT_SECRET:-dev-secret-change-me}`
+      # wäre eine verlorene .env unbemerkt geblieben: die App liefe weiter, aber mit
+      # einem Secret, das im Repo steht, und jeder könnte sich Admin-Tokens ausstellen.
+      DATABASE_URL: postgresql://${DB_USER:?DB_USER fehlt in .env}:${DB_PASSWORD:?DB_PASSWORD fehlt in .env}@pg-shared:5432/prowiki
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET fehlt in .env}
+      PARSER_URL: http://parser:8000/parse
+      PORT: 3000
+      # YouTube-Transkript-Provider (Apify/Supadata) – von Hetzner-IPs ist YouTube gesperrt,
+      # daher muss der externe Provider aus der .env in den Container durchgereicht werden.
+      YOUTUBE_TRANSCRIPT_PROVIDER: ${YOUTUBE_TRANSCRIPT_PROVIDER:-}
+      APIFY_API_KEY: ${APIFY_API_KEY:-}
+      SUPADATA_API_KEY: ${SUPADATA_API_KEY:-}
+    restart: unless-stopped
+    # /health führt ein `select 1` gegen die Datenbank aus (siehe src/index.ts):
+    # ein hängender Prozess, der den Port noch hält, oder eine weggebrochene
+    # DB-Verbindung fallen sonst nicht auf.
+    healthcheck:
+      test: ["CMD-SHELL", "bun -e \"const r = await fetch('http://localhost:3000/health'); process.exit(r.ok ? 0 : 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # Große Uploads werden mehrfach in den RAM kopiert (parseBody → arrayBuffer → Blob).
+    # Cap an den kleinen, geteilten Prod-Host (3,7 GB, ~15 weitere Apps) angepasst:
+    # im Zweifel fällt nur dieser Container (kontrollierter OOM-Restart), nicht der Server.
+    mem_limit: 768m
+    networks:
+      - appnet
+      - hetzner-network
+
+  # Wartungs-Container für die Skripte unter backend/src/scripts (Import,
+  # Embedding-Backfill, Wiki-Läufe, Migrationen). Läuft durch das Profil "tools"
+  # nie im Normalbetrieb mit und wird von `docker compose up -d` ignoriert.
+  #
+  # Der Grund für ein eigenes Image: das App-Image enthält nur das gebündelte
+  # dist/index.js und keine node_modules – dort scheitert jedes Skript sofort.
+  #
+  # Beispiele (auf dem Host, im Repo-Verzeichnis):
+  #   docker compose --profile tools build tools
+  #   docker compose --profile tools run --rm tools \
+  #     bun run src/scripts/verify-rki.ts --workspace "RKI Sitzungsprotokolle"
+  #
+  # Für lange Läufe abgekoppelt starten, damit ein Verbindungsabbruch nichts tut:
+  #   docker compose --profile tools run -d --name rki-wiki tools \
+  #     bun run src/scripts/rki-wiki-run.ts --workspace <id> --depth summary
+  #   docker logs -f rki-wiki
+  tools:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: tools
+    profiles:
+      - tools
+    environment:
+      # Siehe app-Service: Pflichtvariablen, kein stiller Default.
+      DATABASE_URL: postgresql://${DB_USER:?DB_USER fehlt in .env}:${DB_PASSWORD:?DB_PASSWORD fehlt in .env}@pg-shared:5432/prowiki
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET fehlt in .env}
+      PARSER_URL: http://parser:8000/parse
+      YOUTUBE_TRANSCRIPT_PROVIDER: ${YOUTUBE_TRANSCRIPT_PROVIDER:-}
+      APIFY_API_KEY: ${APIFY_API_KEY:-}
+      SUPADATA_API_KEY: ${SUPADATA_API_KEY:-}
+      # Bei Massenläufen zwingend: sonst startet jede Wiki-Generierung einen
+      # workspace-weiten Embedding-Sweep und hunderte davon überlagern sich.
+      WIKI_EMBED_AFTER_GENERATE: "0"
+    volumes:
+      # Zwischenstufe der RKI-Protokolle (Markdown + manifest.json), per rsync
+      # auf den Host gelegt. Bewusst außerhalb des Repos, damit `git pull` beim
+      # Deploy nicht darüber stolpert.
+      - ${RKI_MD_DIR:-/root/rki-md}:/data:ro
+    # Wartungsläufe sind sequenziell und streamend; genügend Luft auf dem
+    # kleinen Host, aber begrenzt, damit ein Fehllauf nicht den Server mitnimmt.
+    mem_limit: 512m
+    # hetzner-network zusätzlich zu appnet: dort liegt seit der Konsolidierung
+    # die Datenbank. Ohne das schlägt jedes Wartungsskript beim Verbinden fehl.
+    networks:
+      - appnet
+      - hetzner-network
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3084}:80"
+    depends_on:
+      app:
+        condition: service_started
+    restart: unless-stopped
+    # Gegen die ausgelieferte SPA, nicht gegen /health – letzteres proxyt nginx
+    # an den app-Container weiter und würde hier dessen Zustand messen.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost/index.html >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # Statisches nginx-Frontend: der laufende Verbrauch liegt bei ~1,5 MB. Der
+    # Deckel ist trotzdem gesetzt, damit im Fehlerfall dieser Container neu
+    # startet, statt dass der OOM-Killer sich einen Nachbarn aussucht.
+    mem_limit: 128m
+    networks:
+      - appnet
+      - hetzner-network
+
+  # ACHTUNG: Hier stand der db-Service. Die Datenbank läuft seit der
+  # Konsolidierung als eigener Stack unter /var/www/pg-shared und bedient auch
+  # mediathek, umami und mathe-quiz. Sie nutzt WEITERHIN DAS VOLUME knora_data
+  # – es wurde nicht kopiert, sondern unverändert übernommen (dort liegt auch
+  # der HNSW-Index auf chunks.embedding).
+  #
+  # Diesen Service deshalb NICHT wieder aufnehmen: ein zweiter Postgres auf
+  # demselben Datenverzeichnis beschädigt es.
+  #
+  # DATABASE_URL zeigt auf den kanonischen Hostnamen "pg-shared". Der Alt-Alias
+  # "knora-db" existiert im hetzner-network weiterhin, weil mediathek noch daran
+  # hängt – knora braucht ihn seit dem 2. August nicht mehr.
+
+  # Parser wird für PDF/DOCX/HTML-Import zwingend gebraucht und läuft daher immer mit
+  # (kein Profil-Gate mehr – sonst startet ihn `docker compose up -d --build` beim
+  # Deploy nicht und der Import bricht ab). PARSER_URL im app-Service zeigt auf parser:8000.
+  parser:
+    build: ./parser
+    environment:
+      PORT: 8000
+    restart: unless-stopped
+    # Im Parser-Image liegt weder curl noch wget – Python ist ohnehin da.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=4).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    # MarkItDown/pdfminer lädt das komplette PDF in den RAM. Cap an den kleinen,
+    # geteilten Prod-Host angepasst (3,7 GB total). ACHTUNG: reicht für kleine/mittlere
+    # PDFs, NICHT für tausende Seiten – solche Riesen-Docs sprengen diese Hardware
+    # unabhängig vom Cap und müssten vorab in Teile gesplittet werden.
+    mem_limit: 1g
+    networks:
+      - appnet
+
+# Kein volumes-Block mehr: das Datenverzeichnis (Volume knora_data) gehört
+# jetzt zum Stack /var/www/pg-shared und wird dort als externes Volume
+# eingebunden.
+
+networks:
+  appnet:
+  hetzner-network:
+    external: true

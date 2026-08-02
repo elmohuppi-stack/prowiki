@@ -1,0 +1,33 @@
+-- ---------------------------------------------------------------------------
+-- Vektorindex auf chunks.embedding
+-- ---------------------------------------------------------------------------
+--
+-- Dieser Index stand seit 0007 nur als Kommentar in der Migration, mit dem
+-- Hinweis, ihn nach dem Embedding-Lauf von Hand anzulegen. Genau das ist
+-- monatelang nicht passiert: jede semantische Suche las die Tabelle sequenziell,
+-- 741 ms statt 12,4 ms, ohne dass irgendetwas fehlschlug.
+--
+-- Der Hinweis war inhaltlich richtig – auf überwiegend NULL-Vektoren ist der
+-- Aufbau langsam und das Ergebnis schlechter. Er gehört nur in eine Datei, die
+-- ausgeführt wird, statt in eine, die jemand lesen müsste.
+--
+-- Die Ops-Klasse muss zum Distanzoperator der App passen: service/search.ts
+-- rechnet mit <=> (Cosinus), also vector_cosine_ops. Ein Index mit der falschen
+-- Klasse wird schlicht nicht benutzt und fällt nur durch Laufzeiten auf.
+--
+-- GROSSE, BEREITS BEFÜLLTE TABELLE: Diese Migration läuft über drizzle-kit in
+-- einer Transaktion, deshalb steht hier die normale Form. Auf einer Tabelle mit
+-- Daten vorher von Hand anlegen, damit der Betrieb nicht blockiert –
+-- IF NOT EXISTS macht die Migration danach zum No-Op:
+--
+--   CREATE INDEX CONCURRENTLY chunks_embedding_hnsw_idx
+--     ON chunks USING hnsw (embedding vector_cosine_ops);
+--
+-- Zwei Fallstricke dabei: Dockers /dev/shm ist per Default 64 MB, parallele
+-- Index-Builds scheitern daran ("could not resize shared memory segment") –
+-- entweder shm_size erhöhen oder SET max_parallel_maintenance_workers = 0.
+-- Und ein abgebrochenes CONCURRENTLY hinterlässt einen ungültigen Index
+-- (indisvalid = false), der vor dem zweiten Versuch weg muss.
+
+CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw_idx
+  ON chunks USING hnsw (embedding vector_cosine_ops);

@@ -1,0 +1,43 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    volumes:
+      - dev-data:/var/lib/postgresql/data
+    ports:
+      # 5433 statt 5432: knora läuft auf derselben Maschine in der Entwicklung
+      # noch parallel und belegt 5432, bis es abgeschaltet wird (Abschaltkriterium
+      # in docs/KONZEPT.md).
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: prowiki
+      POSTGRES_PASSWORD: prowiki-dev
+      POSTGRES_DB: prowiki
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prowiki"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - devnet
+
+  parser:
+    build: ./parser
+    # 8002 aus demselben Grund wie der DB-Port oben.
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./parser:/app
+    environment:
+      PORT: 8000
+    restart: unless-stopped
+    # Siehe docker-compose.yml: MarkItDown lädt große PDFs komplett in den RAM.
+    mem_limit: 4g
+    networks:
+      - devnet
+
+volumes:
+  dev-data:
+
+networks:
+  devnet:

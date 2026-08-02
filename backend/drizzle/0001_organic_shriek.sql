@@ -1,0 +1,1 @@
+ALTER TABLE "chunks" ALTER COLUMN "document_id" SET DATA TYPE varchar(64);

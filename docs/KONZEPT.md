@@ -307,6 +307,21 @@ Wikis, damit ein viraler Link keine Rechnung erzeugt.
 
 ---
 
+### 4.6 Betrieb, Kapazität und Hosting
+
+Betriebsumgebungen (lokal / Staging / Produktion), die gemessene Kapazität des bestehenden
+Servers, der Anbietervergleich und die Serverentscheidung stehen in einem eigenen Dokument:
+**[HOSTING.md](./HOSTING.md)**.
+
+Für die Architektur hier genügen zwei Ergebnisse daraus:
+
+- **RAM ist die bindende Größe**, nicht CPU — wegen des Vektorindex (541 MB für ein Wiki mit
+  5.703 Seiten), der im Arbeitsspeicher liegen muss.
+- **Vor dem ersten großen Import ist kein neuer Server nötig.** Stufe 0 läuft vollständig
+  lokal gegen `docker-compose.dev.yml`.
+
+---
+
 ## 5. Weitere Vorschläge — was prowiki zum Werkzeug macht
 
 Über die Frage hinaus, sortiert nach Verhältnis von Nutzen zu Aufwand.
@@ -400,25 +415,48 @@ Firmenkunden.
 
 ---
 
-## 7. Offene Entscheidungen
+## 7. Entscheidungen
 
-Drei Punkte legen die Struktur fest und sollten vor Stufe 0 beantwortet sein:
+### Getroffen am 2. August 2026
 
-1. **Ein Codebase oder zwei?**
-   *Empfehlung: einer.* prowiki wird knora v2, knoras Daten (RKI-Wiki, 5.703 Seiten) wandern
-   als erste Organisation hinein, knora wird danach abgeschaltet. Ein Fork bedeutet, jede
-   Korrektur zweimal zu machen — bei 25.800 Zeilen und einem Entwickler ist das der teurere
-   Weg. Gegen die Empfehlung spricht nur: knora läuft und soll nicht wackeln. Das ist mit
-   dem geprüften Backup und einer parallelen prowiki-Instanz auffangbar.
+1. **Better Auth statt Eigenbau.** Begründung in 2.9. Damit entfallen Befunde 2.1–2.4 und
+   Teile von 2.8 als selbst zu schreibender Code; Sessions liegen widerrufbar in derselben
+   Postgres-DB. Die Capability- und Sichtbarkeitslogik aus 4.1 bleibt unsere.
 
-2. **Better Auth oder selbst bauen?**
-   *Empfehlung: Better Auth* (Begründung in 2.9). Die Alternative heißt, Passwort-Reset,
-   Session-Widerruf, 2FA und SSO selbst zu schreiben und zu pflegen.
+2. **Transkript-Zeitmarken von Anfang an.** `transcript_segments` ist Teil des ersten
+   Schemas, nicht einer späteren Migration. Die Wiki-Generierung führt die Zeitmarken bis in
+   die Zitate durch (4.4). Nachrüsten hätte bedeutet, alle Transkripte erneut zu holen und
+   bei Apify erneut zu bezahlen.
 
-3. **Zeitmarken jetzt oder später?**
-   *Empfehlung: jetzt.* Nachrüsten heißt, alle Transkripte erneut zu holen — bei Apify mit
-   erneuten Kosten. Vor dem ersten Import von 300 Videos ist es eine Schema-Entscheidung,
-   danach eine Migration.
+3. **Ein Codebase: prowiki ist knora v2.** knora wird nach erfolgreichem Start von prowiki
+   abgeschaltet, das RKI-Wiki zieht als erste Organisation um. Kein Fork, keine doppelte
+   Pflege der ~80 % geteilten Codes.
+
+   prowiki ist funktional ein Superset von knora. **Nicht** übernommen werden zwei
+   *Mechanismen*: die `.env`-Admin-Hintertür (2.1) und das globale
+   `admin/editor/viewer`-Modell (2.5) — beide werden durch 4.1 ersetzt. Inhaltlich fehlt
+   nichts, der Anmelde- und Navigationsablauf ändert sich.
+
+4. **Getrennte Umgebungen und größere Hardware** vor dem ersten zahlenden Kunden —
+   Dimensionierung, Anbietervergleich und Serverentscheidung in [HOSTING.md](./HOSTING.md).
+
+### Abschaltkriterium für knora
+
+Erst wenn alle fünf Punkte erfüllt sind:
+
+- [ ] Alle 5.703 Wiki-Seiten, Dokumente, Chunks und Embeddings migriert, **Zeilenzahlen
+      abgeglichen** (Verfahren wie beim Restore-Test am 2. August)
+- [ ] Identische Treffer bei einem festen Satz Testsuchen (Volltext, Vektor, Facetten)
+- [ ] `manually_edited`-Flags und `wiki_page_revisions` erhalten — sonst überschreibt der
+      erste Generierungslauf in prowiki die Handarbeit
+- [ ] Phase Parallelbetrieb, in der das RKI-Wiki in prowiki real benutzt wurde
+- [ ] Backup für prowiki läuft und ist per Restore geprüft
+
+Danach knora stoppen, den letzten Dump aufheben.
+
+### Offen
+
+Keine offenen Grundsatzentscheidungen mehr — Stufe 0 kann beginnen.
 
 Und eine Frage zum Hosting, die nicht die Struktur, aber den Zeitplan betrifft: der
 3,7-GB-Hetzner-Host trägt knora heute knapp. Ein öffentliches Wiki mit anonymem Chat, ein
