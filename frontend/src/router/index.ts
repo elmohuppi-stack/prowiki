@@ -99,6 +99,14 @@ const router = createRouter({
       component: () => import("../views/settings/OrgSettings.vue"),
       meta: { requiresAuth: true },
     },
+    {
+      // Bewusst ohne requiresAuth: eine Datenschutzerklärung, die man erst nach
+      // der Anmeldung lesen kann, erfüllt "leicht erkennbar und unmittelbar
+      // erreichbar" nicht. Sie ist deshalb auch von der Login-Seite aus verlinkt.
+      path: "/datenschutz",
+      name: "Datenschutz",
+      component: () => import("../views/legal/Privacy.vue"),
+    },
   ],
 });
 

@@ -49,6 +49,22 @@
         <span class="sidebar-user">{{ auth.userName }}</span>
         <button class="sidebar-logout" @click="logout">Abmelden</button>
       </div>
+      <!-- Aus jeder Seite erreichbar, nicht nur von der Startseite — sonst ist
+           "leicht erkennbar und unmittelbar erreichbar" nicht zuverlässig
+           erfüllt. Das Impressum liegt zentral für alle Apps unter
+           elmarhepp.de; prowiki hält nur die eigene Datenschutzseite. -->
+      <div class="sidebar-legal">
+        <template v-if="!sidebarCollapsed">
+          <a href="https://elmarhepp.de/impressum">Impressum</a>
+          <router-link to="/datenschutz">Datenschutz</router-link>
+        </template>
+        <!-- Eingeklappt ist kein Platz für zwei Wörter. Statt die Links
+             auszublenden bleibt ein Zeichen stehen: die Datenschutzseite
+             verlinkt ihrerseits das Impressum, damit beides erreichbar bleibt. -->
+        <router-link v-else to="/datenschutz" title="Impressum und Datenschutz"
+          >§</router-link
+        >
+      </div>
     </aside>
 
     <!-- Main Content -->
@@ -387,6 +403,27 @@ body {
 
 .sidebar-footer .sidebar-user {
   flex: 1;
+}
+
+.sidebar-legal {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0 0.75rem 0.75rem;
+  font-size: 0.75rem;
+}
+.sidebar-legal a {
+  color: var(--color-sidebar-text);
+  opacity: 0.6;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.sidebar-legal a:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+.app-sidebar.collapsed .sidebar-legal {
+  justify-content: center;
+  padding: 0 0 0.75rem;
 }
 
 .sidebar-user {

@@ -40,6 +40,23 @@ export const trustedOrigins = (process.env.TRUSTED_ORIGINS ?? BASE_URL)
   .map((s) => s.trim())
   .filter(Boolean);
 
+/**
+ * Selbstregistrierung — standardmäßig **aus**.
+ *
+ * `POST /sign-up/email` ist sonst für jeden offen, auch ohne Link in der
+ * Oberfläche; die Betriebsregel des Servers verlangt sie deshalb geschlossen
+ * (platform/NEUE-APP.md 4.1). Nötig ist sie trotzdem einmal: die ersten Konten
+ * entstehen genau darüber, weil weder bootstrap-org.ts noch das
+ * Migrationsskript Konten anlegen dürfen.
+ *
+ * Deshalb ein Schalter statt eines zweiten Deploys — `ALLOW_SIGNUP=1` für den
+ * Bootstrap, danach zurück auf 0 und `docker compose up -d`. Ohne den Schalter
+ * stünde die App zwischen Start und Nachbesserung offen im Netz.
+ *
+ * Der reguläre Weg für weitere Nutzer sind Einladungen (Stufe 3, braucht Mail).
+ */
+const allowSignup = process.env.ALLOW_SIGNUP === "1";
+
 export const auth = betterAuth({
   appName: "prowiki",
   baseURL: BASE_URL,
@@ -50,6 +67,7 @@ export const auth = betterAuth({
 
   emailAndPassword: {
     enabled: true,
+    disableSignUp: !allowSignup,
     // Ohne bestätigte Adresse kein Login. Verhindert, dass sich jemand mit einer
     // fremden Adresse registriert und über den Einladungs-Flow Zugriff erbt.
     requireEmailVerification: true,

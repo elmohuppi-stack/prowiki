@@ -1,33 +1,43 @@
+# Produktions-Stack für /var/www/prowiki auf nuernberg-16gb.
+#
+# Servicenamen tragen alle den Slug. Das ist keine Kosmetik: im geteilten Netz
+# `apps-net` ist der Servicename ein **serverweiter** DNS-Alias. Am 8. August 2026
+# hieß dieser Name in vier Stacks `app`; Dockers DNS gab reihum eine fremde
+# Adresse zurück, und knoras Login endete nach zehn Sekunden mit einem 401 aus
+# wandervogels Code. Details in platform/ARCHITEKTUR.md 6.1.
 services:
-  app:
+  prowiki-app:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    # Kein Host-Port nötig: Das Frontend (nginx) proxied /api/ intern zu app:3000
-    # über das appnet-Netzwerk. Ein Host-Mapping würde mit FRONTEND_PORT kollidieren,
-    # wenn WEB_PORT == FRONTEND_PORT gesetzt ist.
-    # ports:
-    #   - "127.0.0.1:${WEB_PORT:-3102}:3000"
+    # Kein Host-Port: prowiki-web proxyt /api/ intern über appnet.
     environment:
-      # Pflichtvariablen mit :? statt :- – ein fehlender Wert bricht den Start ab,
-      # statt still auf einen Default zurückzufallen. Mit `${AUTH_SECRET:-dev-secret-change-me}`
-      # wäre eine verlorene .env unbemerkt geblieben: die App liefe weiter, aber mit
-      # einem Secret, das im Repo steht, und jeder könnte sich Admin-Tokens ausstellen.
-      DATABASE_URL: postgresql://${DB_USER:?DB_USER fehlt in .env}:${DB_PASSWORD:?DB_PASSWORD fehlt in .env}@pg-shared:5432/prowiki
+      DATABASE_URL: postgresql://${DB_USER:?DB_USER fehlt in .env}:${DB_PASSWORD:?DB_PASSWORD fehlt in .env}@pg-shared:5432/${DB_NAME:-prowiki}
+      # Pflichtvariablen mit :? statt :- — ein fehlender Wert bricht den Start ab,
+      # statt still auf einen Default zurückzufallen. Mit einem Default-Secret liefe
+      # die App weiter, aber jeder mit Repo-Zugang könnte sich Sitzungen ausstellen.
       AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET fehlt in .env}
       APP_BASE_URL: ${APP_BASE_URL:?APP_BASE_URL fehlt in .env}
       TRUSTED_ORIGINS: ${TRUSTED_ORIGINS:-}
-      PARSER_URL: http://parser:8000/parse
+      # Ohne das laufen die Sitzungscookies ohne Secure-Flag: useSecureCookies in
+      # auth/index.ts hängt genau an dieser Variablen.
+      NODE_ENV: production
+      # Selbstregistrierung ist zu (platform/NEUE-APP.md 4.1). Für den einmaligen
+      # Bootstrap der ersten Konten kurz auf 1, danach zurück.
+      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-0}
+      # max_connections = 100 gilt für alle Apps zusammen; Richtwert für eine neue
+      # App ist 5–10 (platform/ARCHITEKTUR.md 4.2).
+      DB_POOL_MAX: ${DB_POOL_MAX:-8}
+      PARSER_URL: http://prowiki-parser:8000/parse
       PORT: 3000
-      # YouTube-Transkript-Provider (Apify/Supadata) – von Hetzner-IPs ist YouTube gesperrt,
-      # daher muss der externe Provider aus der .env in den Container durchgereicht werden.
+      # YouTube blockt Rechenzentrums-IPs; auf dem Server ist ein Transkript-Provider
+      # zwingend, lokal nicht.
       YOUTUBE_TRANSCRIPT_PROVIDER: ${YOUTUBE_TRANSCRIPT_PROVIDER:-}
       APIFY_API_KEY: ${APIFY_API_KEY:-}
       SUPADATA_API_KEY: ${SUPADATA_API_KEY:-}
     restart: unless-stopped
-    # /health führt ein `select 1` gegen die Datenbank aus (siehe src/index.ts):
-    # ein hängender Prozess, der den Port noch hält, oder eine weggebrochene
-    # DB-Verbindung fallen sonst nicht auf.
+    # /health führt ein `select 1` gegen die Datenbank aus (src/index.ts): ein
+    # hängender Prozess, der den Port noch hält, fällt sonst nicht auf.
     healthcheck:
       test: ["CMD-SHELL", "bun -e \"const r = await fetch('http://localhost:3000/health'); process.exit(r.ok ? 0 : 1)\""]
       interval: 30s
@@ -35,30 +45,26 @@ services:
       retries: 3
       start_period: 20s
     # Große Uploads werden mehrfach in den RAM kopiert (parseBody → arrayBuffer → Blob).
-    # Cap an den kleinen, geteilten Prod-Host (3,7 GB, ~15 weitere Apps) angepasst:
-    # im Zweifel fällt nur dieser Container (kontrollierter OOM-Restart), nicht der Server.
+    # Der Deckel macht daraus einen kontrollierten Neustart dieses Containers statt
+    # eines OOM-Kills bei einem beliebigen Nachbarn.
     mem_limit: 768m
     networks:
-      - appnet
-      - hetzner-network
+      # `- default` muss stehen: sobald ein Service networks: deklariert, verliert
+      # er das Default-Netz und findet die eigenen Nachbardienste nicht mehr.
+      - default
+      - apps-net
 
-  # Wartungs-Container für die Skripte unter backend/src/scripts (Import,
-  # Embedding-Backfill, Wiki-Läufe, Migrationen). Läuft durch das Profil "tools"
-  # nie im Normalbetrieb mit und wird von `docker compose up -d` ignoriert.
+  # Wartungs-Container für backend/src/scripts (Migration knora → prowiki,
+  # Schema-Migration, Embedding-Backfill, Wiki-Läufe). Startet durch das Profil
+  # "tools" nie im Normalbetrieb mit.
   #
-  # Der Grund für ein eigenes Image: das App-Image enthält nur das gebündelte
-  # dist/index.js und keine node_modules – dort scheitert jedes Skript sofort.
+  # Eigenes Image, weil das Runtime-Image nur das gebündelte dist/index.js enthält
+  # — dort scheitert jedes Skript mit "Cannot find package 'drizzle-orm'".
   #
-  # Beispiele (auf dem Host, im Repo-Verzeichnis):
-  #   docker compose --profile tools build tools
-  #   docker compose --profile tools run --rm tools \
-  #     bun run src/scripts/verify-rki.ts --workspace "RKI Sitzungsprotokolle"
-  #
-  # Für lange Läufe abgekoppelt starten, damit ein Verbindungsabbruch nichts tut:
-  #   docker compose --profile tools run -d --name rki-wiki tools \
-  #     bun run src/scripts/rki-wiki-run.ts --workspace <id> --depth summary
-  #   docker logs -f rki-wiki
-  tools:
+  #   docker compose --profile tools run --rm prowiki-tools bun run db:migrate
+  #   docker compose --profile tools run --rm prowiki-tools \
+  #     bun run src/scripts/migrate-knora.ts --source "$SOURCE_DATABASE_URL" --org "…"
+  prowiki-tools:
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -66,79 +72,62 @@ services:
     profiles:
       - tools
     environment:
-      # Siehe app-Service: Pflichtvariablen, kein stiller Default.
-      DATABASE_URL: postgresql://${DB_USER:?DB_USER fehlt in .env}:${DB_PASSWORD:?DB_PASSWORD fehlt in .env}@pg-shared:5432/prowiki
+      DATABASE_URL: postgresql://${DB_USER:?DB_USER fehlt in .env}:${DB_PASSWORD:?DB_PASSWORD fehlt in .env}@pg-shared:5432/${DB_NAME:-prowiki}
+      # Nur für den einmaligen Migrationslauf gesetzt und danach wieder aus der
+      # .env entfernt — sie enthält die Zugangsdaten einer fremden Datenbank.
+      SOURCE_DATABASE_URL: ${SOURCE_DATABASE_URL:-}
       AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET fehlt in .env}
       APP_BASE_URL: ${APP_BASE_URL:?APP_BASE_URL fehlt in .env}
-      TRUSTED_ORIGINS: ${TRUSTED_ORIGINS:-}
-      PARSER_URL: http://parser:8000/parse
+      NODE_ENV: production
+      DB_POOL_MAX: ${DB_POOL_MAX:-8}
+      PARSER_URL: http://prowiki-parser:8000/parse
       YOUTUBE_TRANSCRIPT_PROVIDER: ${YOUTUBE_TRANSCRIPT_PROVIDER:-}
       APIFY_API_KEY: ${APIFY_API_KEY:-}
       SUPADATA_API_KEY: ${SUPADATA_API_KEY:-}
       # Bei Massenläufen zwingend: sonst startet jede Wiki-Generierung einen
-      # workspace-weiten Embedding-Sweep und hunderte davon überlagern sich.
+      # wiki-weiten Embedding-Sweep und hunderte davon überlagern sich.
       WIKI_EMBED_AFTER_GENERATE: "0"
-    volumes:
-      # Zwischenstufe der RKI-Protokolle (Markdown + manifest.json), per rsync
-      # auf den Host gelegt. Bewusst außerhalb des Repos, damit `git pull` beim
-      # Deploy nicht darüber stolpert.
-      - ${RKI_MD_DIR:-/root/rki-md}:/data:ro
-    # Wartungsläufe sind sequenziell und streamend; genügend Luft auf dem
-    # kleinen Host, aber begrenzt, damit ein Fehllauf nicht den Server mitnimmt.
     mem_limit: 512m
-    # hetzner-network zusätzlich zu appnet: dort liegt seit der Konsolidierung
-    # die Datenbank. Ohne das schlägt jedes Wartungsskript beim Verbinden fehl.
     networks:
-      - appnet
-      - hetzner-network
+      - default
+      - apps-net
 
-  frontend:
+  prowiki-web:
     build:
-      context: ./frontend
+      context: .
+      dockerfile: frontend/Dockerfile
     ports:
-      - "127.0.0.1:${FRONTEND_PORT:-3101}:80"
+      # Portblock 3121/3122 (platform/ARCHITEKTUR.md 5). Nur auf 127.0.0.1 —
+      # öffentlich ist ausschließlich der Host-nginx.
+      - "127.0.0.1:${FRONTEND_PORT:-3121}:80"
     depends_on:
-      app:
+      prowiki-app:
         condition: service_started
     restart: unless-stopped
-    # Gegen die ausgelieferte SPA, nicht gegen /health – letzteres proxyt nginx
-    # an den app-Container weiter und würde hier dessen Zustand messen.
+    # Gegen die ausgelieferte SPA, nicht gegen /health — letzteres proxyt nginx an
+    # prowiki-app weiter und würde hier dessen Zustand messen.
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost/index.html >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
-    # Statisches nginx-Frontend: der laufende Verbrauch liegt bei ~1,5 MB. Der
-    # Deckel ist trotzdem gesetzt, damit im Fehlerfall dieser Container neu
-    # startet, statt dass der OOM-Killer sich einen Nachbarn aussucht.
     mem_limit: 128m
+    # KEIN apps-net: das Frontend spricht nur mit der eigenen API im Compose-Netz
+    # und ist von außen über den Host-nginx erreichbar. Wer draußen bleibt, löst
+    # fremde Nachbarnamen gar nicht erst auf.
     networks:
-      - appnet
-      - hetzner-network
+      - default
 
-  # ACHTUNG: Hier stand der db-Service. Die Datenbank läuft seit der
-  # Konsolidierung als eigener Stack unter /var/www/pg-shared und bedient auch
-  # mediathek, umami und mathe-quiz. Sie nutzt WEITERHIN DAS VOLUME knora_data
-  # – es wurde nicht kopiert, sondern unverändert übernommen (dort liegt auch
-  # der HNSW-Index auf chunks.embedding).
-  #
-  # Diesen Service deshalb NICHT wieder aufnehmen: ein zweiter Postgres auf
-  # demselben Datenverzeichnis beschädigt es.
-  #
-  # DATABASE_URL zeigt auf den kanonischen Hostnamen "pg-shared". Der Alt-Alias
-  # "knora-db" existiert im hetzner-network weiterhin, weil mediathek noch daran
-  # hängt – knora braucht ihn seit dem 2. August nicht mehr.
-
-  # Parser wird für PDF/DOCX/HTML-Import zwingend gebraucht und läuft daher immer mit
-  # (kein Profil-Gate mehr – sonst startet ihn `docker compose up -d --build` beim
-  # Deploy nicht und der Import bricht ab). PARSER_URL im app-Service zeigt auf parser:8000.
-  parser:
+  # Parser (MarkItDown) für PDF/DOCX/HTML. Läuft immer mit — hinter einem Profil
+  # würde ihn `docker compose up -d` beim Deploy nicht starten und jeder Import
+  # bräche ab.
+  prowiki-parser:
     build: ./parser
     environment:
       PORT: 8000
     restart: unless-stopped
-    # Im Parser-Image liegt weder curl noch wget – Python ist ohnehin da.
+    # Im Parser-Image liegt weder curl noch wget — Python ist ohnehin da.
     healthcheck:
       test:
         - CMD-SHELL
@@ -147,19 +136,21 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-    # MarkItDown/pdfminer lädt das komplette PDF in den RAM. Cap an den kleinen,
-    # geteilten Prod-Host angepasst (3,7 GB total). ACHTUNG: reicht für kleine/mittlere
-    # PDFs, NICHT für tausende Seiten – solche Riesen-Docs sprengen diese Hardware
-    # unabhängig vom Cap und müssten vorab in Teile gesplittet werden.
+    # MarkItDown/pdfminer lädt das komplette PDF in den RAM. Reicht für kleine und
+    # mittlere Dokumente, nicht für tausendseitige — die sprengen diese Hardware
+    # unabhängig vom Deckel und müssten vorab geteilt werden.
     mem_limit: 1g
     networks:
-      - appnet
+      - default
 
-# Kein volumes-Block mehr: das Datenverzeichnis (Volume knora_data) gehört
-# jetzt zum Stack /var/www/pg-shared und wird dort als externes Volume
-# eingebunden.
+# ACHTUNG: Hier stand in knora ein db-Service. Die Datenbank läuft seit der
+# Konsolidierung als eigener Stack unter /var/www/pg-shared und bedient fünf Apps.
+# Diesen Service nicht wieder aufnehmen: ein zweiter Postgres auf demselben
+# Datenverzeichnis beschädigt es — lautlos.
 
 networks:
-  appnet:
-  hetzner-network:
+  # Das gemeinsame Netz, in dem pg-shared erreichbar ist. `external: true`, weil
+  # es diesem Stack nicht gehört; ohne das legt jeder Stack ein eigenes Netz
+  # gleichen Namens an und erreicht die Datenbank nicht.
+  apps-net:
     external: true

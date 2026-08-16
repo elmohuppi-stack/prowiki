@@ -13,7 +13,9 @@ set -euo pipefail
 #   - .env liegt dort mit Mode 600
 #   - Datenbank + unprivilegierte Rolle sind angelegt
 #   - nginx-Vhost in sites-available UND Symlink in sites-enabled
-#   - Portblock 3101/3102 ist vergeben
+#   - Portblock 3121/3122 ist vergeben (3101/3102 gehören wandervogel)
+#
+# Der vollständige Ablauf der ersten Live-Schaltung steht in docs/LIVEGANG.md.
 
 APP_SLUG="${APP_SLUG:-prowiki}"
 REMOTE_DIR="/var/www/${APP_SLUG}"

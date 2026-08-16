@@ -1,0 +1,13 @@
+# Beide Images bauen aus dem Repo-Wurzelverzeichnis (Workspace-Auflösung, siehe
+# frontend/Dockerfile). Ohne diese Datei wandern node_modules und dist bei jedem
+# Build in den Kontext — beim Frontend allein mehrere hundert Megabyte, die
+# anschließend ohnehin überschrieben werden.
+node_modules
+**/node_modules
+dist
+**/dist
+.git
+.env
+**/.env
+*.log
+.DS_Store

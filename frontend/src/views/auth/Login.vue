@@ -46,6 +46,13 @@
           {{ loading ? "Wird angemeldet..." : "Anmelden" }}
         </button>
       </form>
+
+      <!-- Die Login-Seite ist die einzige Ansicht, die jeder unangemeldete
+           Besucher sieht — hier müssen beide Links stehen. -->
+      <div class="login-legal">
+        <a href="https://elmarhepp.de/impressum">Impressum</a>
+        <router-link to="/datenschutz">Datenschutz</router-link>
+      </div>
     </div>
   </div>
 </template>
@@ -204,6 +211,21 @@ h1 {
   background: #fef2f2;
   border-radius: 6px;
   border: 1px solid #fecaca;
+}
+
+.login-legal {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 1.5rem;
+  font-size: 0.8rem;
+}
+.login-legal a {
+  color: #6b7280;
+  text-decoration: none;
+}
+.login-legal a:hover {
+  text-decoration: underline;
 }
 
 .login-btn {
