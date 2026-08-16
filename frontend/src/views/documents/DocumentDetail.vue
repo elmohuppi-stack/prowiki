@@ -104,6 +104,57 @@
         </div>
       </div>
 
+      <!-- Wiki-Artikel bewusst VOR dem Transkript.
+           Das Transkript ist bei einem langen Video eine Liste aus hunderten
+           Zeitmarken-Zeilen; dahinter war dieser Kasten faktisch unerreichbar,
+           man hätte an tausenden Pixeln vorbeiscrollen müssen. Was man mit dem
+           Dokument tun kann, gehört nach oben — der Volltext ist Nachschlagewerk
+           und darf unten stehen. -->
+      <div class="wiki-sidebar-box">
+        <h4>📖 Wiki-Artikel</h4>
+        <div v-if="wikiPages.length > 0">
+          <div v-for="wp in wikiPages" :key="wp.id" class="wiki-link-item">
+            <router-link
+              :to="
+                '/wikis/' +
+                wikiId +
+                '/wiki/' +
+                encodeURIComponent(wp.slug)
+              "
+            >
+              {{ wp.title }}
+            </router-link>
+            <span class="wiki-type">{{ wp.page_type }}</span>
+          </div>
+        </div>
+        <p v-else class="empty">Noch keine Wiki-Artikel zu diesem Dokument.</p>
+
+        <!-- Der Knopf steht bewusst außerhalb des v-else: er war bisher nur bei
+             leerer Liste sichtbar, wodurch ein bestehender Artikel gar nicht
+             erneuert werden konnte. Ein zweiter Lauf legt keine Duplikate an —
+             Seiten werden über ihren Slug aufgelöst und fortgeschrieben. -->
+        <div class="wiki-gen-actions">
+          <button
+            class="btn-primary btn-sm"
+            @click="generateWiki"
+            :disabled="generating"
+          >
+            {{
+              generating
+                ? "⏳ Generiere..."
+                : wikiPages.length > 0
+                  ? "🔄 Wiki-Artikel neu generieren"
+                  : "📖 Wiki-Artikel generieren"
+            }}
+          </button>
+          <span v-if="generating" class="gen-note"
+            >Das dauert je nach Länge des Dokuments einige Minuten — Seite
+            offen lassen.</span
+          >
+        </div>
+        <p v-if="genResult" class="gen-feedback">{{ genResult }}</p>
+      </div>
+
       <!-- Transkript. Mit Zeitmarken als klickbare Liste, sonst wie bisher
            als Rohtext. -->
       <div class="transcript-head">
@@ -153,52 +204,6 @@
         <pre>{{ doc.content }}</pre>
       </div>
       <p v-else class="empty">(Kein Inhalt)</p>
-
-      <!-- Verknüpfte Wiki-Artikel -->
-      <div class="wiki-sidebar-box">
-        <h4>📖 Wiki-Artikel</h4>
-        <div v-if="wikiPages.length > 0">
-          <div v-for="wp in wikiPages" :key="wp.id" class="wiki-link-item">
-            <router-link
-              :to="
-                '/wikis/' +
-                wikiId +
-                '/wiki/' +
-                encodeURIComponent(wp.slug)
-              "
-            >
-              {{ wp.title }}
-            </router-link>
-            <span class="wiki-type">{{ wp.page_type }}</span>
-          </div>
-        </div>
-        <p v-else class="empty">Noch keine Wiki-Artikel zu diesem Dokument.</p>
-
-        <!-- Der Knopf steht bewusst außerhalb des v-else: er war bisher nur bei
-             leerer Liste sichtbar, wodurch ein bestehender Artikel gar nicht
-             erneuert werden konnte. Ein zweiter Lauf legt keine Duplikate an —
-             Seiten werden über ihren Slug aufgelöst und fortgeschrieben. -->
-        <div class="wiki-gen-actions">
-          <button
-            class="btn-primary btn-sm"
-            @click="generateWiki"
-            :disabled="generating"
-          >
-            {{
-              generating
-                ? "⏳ Generiere..."
-                : wikiPages.length > 0
-                  ? "🔄 Wiki-Artikel neu generieren"
-                  : "📖 Wiki-Artikel generieren"
-            }}
-          </button>
-          <span v-if="generating" class="gen-note"
-            >Das dauert je nach Länge des Dokuments einige Minuten — Seite
-            offen lassen.</span
-          >
-        </div>
-        <p v-if="genResult" class="gen-feedback">{{ genResult }}</p>
-      </div>
 
       <ConfirmModal
         :show="showConfirm"
@@ -642,6 +647,37 @@ function formatDate(dateStr: string) {
   margin-top: 0.5rem;
   font-size: 0.85rem;
   color: var(--color-primary);
+}
+/* Bisher ein unformatierter Block ganz am Seitenende, wo das nicht auffiel.
+   Zwischen Metadaten und Transkript braucht er eine eigene Kante, sonst
+   verschwimmen Artikel-Links und Transkript zu einer Textwand. Gleiches
+   Muster wie .meta-card und .transcript-box. */
+.wiki-sidebar-box {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 1.25rem;
+}
+.wiki-sidebar-box h4 {
+  font-size: 0.95rem;
+  margin-bottom: 0.5rem;
+}
+.wiki-link-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.wiki-link-item:last-child {
+  border-bottom: none;
+}
+.wiki-type {
+  font-size: 0.72rem;
+  color: var(--color-text-secondary);
+  /* Nach rechts, damit die Artikeltitel eine gemeinsame linke Kante behalten. */
+  margin-left: auto;
 }
 .wiki-gen-actions {
   display: flex;
