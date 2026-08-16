@@ -522,8 +522,6 @@ documentRouter.post("/:id/refresh-transcript", async (c) => {
   // sonst kämen sie weder in die Chunks noch in eine spätere Generierung.
   const { content, timeline } = buildDocumentText(info);
   await documentService.updateDocumentContent(id, content);
-  await documentService.deleteChunks(id);
-  await scheduleChunking(id, doc.wiki_id, content, timeline);
 
   await updateLog(logId, {
     status: "completed",
@@ -532,13 +530,36 @@ documentRouter.post("/:id/refresh-transcript", async (c) => {
     duration_ms: Date.now() - t0,
   });
 
+  /**
+   * Chunking und Einbettung laufen entkoppelt weiter — wie beim Import.
+   *
+   * Vorher hing beides im Request. Bei einem vierstündigen Video sind das
+   * achttausend Segmente und knapp siebenhundert Chunks: nginx gab nach
+   * seinem Lesetimeout auf und schickte dem Browser eine 502, obwohl im
+   * Hintergrund alles sauber durchlief. Der Nutzer sah einen Fehler, wo
+   * keiner war.
+   *
+   * Die Segmente stehen zu diesem Zeitpunkt bereits in der Datenbank, die
+   * Transkriptansicht ist also sofort vollständig. Das Löschen der alten
+   * Chunks passiert erst hier drin, damit das Dokument nicht unnötig lange
+   * ohne Chunks dasteht.
+   */
+  setTimeout(() => {
+    (async () => {
+      await documentService.deleteChunks(id);
+      await scheduleChunking(id, doc.wiki_id, content, timeline);
+    })().catch((e: any) =>
+      console.error(`[doc] Chunking nach Transkript-Abruf fehlgeschlagen:`, e.message),
+    );
+  }, 100);
+
   return c.json({
     success: true,
     segments: info.segments.length,
     transcript_language: info.transcriptLanguage,
     transcript_source: info.transcriptSource,
     hinweis:
-      "Chunks und Einbettungen wurden erneuert. Wiki-Artikel bleiben unverändert – sie müssen bei Bedarf getrennt neu erzeugt werden.",
+      "Chunks und Einbettungen werden im Hintergrund erneuert. Wiki-Artikel bleiben unverändert – sie müssen bei Bedarf getrennt neu erzeugt werden.",
   });
 });
 

@@ -93,5 +93,19 @@ console.log(`🚀 prowiki API auf Port ${port} (max Upload ${maxUploadMb} MB)`);
 Bun.serve({
   port,
   maxRequestBodySize: maxUploadMb * 1024 * 1024,
+  /**
+   * Buns Vorgabe sind 10 Sekunden: dauert ein Handler länger, bis er das erste
+   * Byte schreibt, schließt Bun die Verbindung. nginx meldet das als
+   * „upstream prematurely closed connection while reading response header" und
+   * schickt dem Browser eine 502 — obwohl serverseitig alles sauber weiterläuft.
+   *
+   * Getroffen hat es jeden Aufruf, der auf einen fremden Dienst wartet: das
+   * Neuholen eines Transkripts (Apify braucht 10–20 s) und die Wiki-Generierung
+   * (im Log über 200 s). Beide sahen im Browser aus wie ein Serverfehler.
+   *
+   * 255 s ist der von Bun zugelassene Höchstwert. Beide nginx-Schichten stehen
+   * ohnehin auf 86400 s, das Limit lag allein hier.
+   */
+  idleTimeout: 255,
   fetch: app.fetch,
 });
