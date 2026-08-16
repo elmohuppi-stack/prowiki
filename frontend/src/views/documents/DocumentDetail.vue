@@ -172,18 +172,40 @@
             <span class="wiki-type">{{ wp.page_type }}</span>
           </div>
         </div>
-        <div v-else>
-          <p class="empty">Noch keine Wiki-Artikel zu diesem Dokument.</p>
+        <p v-else class="empty">Noch keine Wiki-Artikel zu diesem Dokument.</p>
+
+        <!-- Der Knopf steht bewusst außerhalb des v-else: er war bisher nur bei
+             leerer Liste sichtbar, wodurch ein bestehender Artikel gar nicht
+             erneuert werden konnte. Ein zweiter Lauf legt keine Duplikate an —
+             Seiten werden über ihren Slug aufgelöst und fortgeschrieben. -->
+        <div class="wiki-gen-actions">
           <button
             class="btn-primary btn-sm"
             @click="generateWiki"
             :disabled="generating"
           >
-            {{ generating ? "⏳ Generiere..." : "📖 Wiki-Artikel generieren" }}
+            {{
+              generating
+                ? "⏳ Generiere..."
+                : wikiPages.length > 0
+                  ? "🔄 Wiki-Artikel neu generieren"
+                  : "📖 Wiki-Artikel generieren"
+            }}
           </button>
-          <p v-if="genResult" class="gen-feedback">{{ genResult }}</p>
+          <span v-if="generating" class="gen-note"
+            >Das dauert je nach Länge des Dokuments einige Minuten — Seite
+            offen lassen.</span
+          >
         </div>
+        <p v-if="genResult" class="gen-feedback">{{ genResult }}</p>
       </div>
+
+      <ConfirmModal
+        :show="showConfirm"
+        :options="confirmOptions"
+        :on-confirm="onConfirm"
+        :on-cancel="onCancel"
+      />
     </template>
   </main>
 </template>
@@ -192,7 +214,17 @@
 import { ref, computed, onMounted } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useAuthStore } from "../../stores/auth";
+import { useConfirm } from "../../composables/useConfirm";
+import ConfirmModal from "../../components/ConfirmModal.vue";
 import axios from "axios";
+
+const {
+  show: showConfirm,
+  options: confirmOptions,
+  ask: askConfirm,
+  onConfirm,
+  onCancel,
+} = useConfirm();
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -387,6 +419,23 @@ async function loadWikiPages() {
 }
 
 async function generateWiki() {
+  // Nur beim *erneuten* Lauf rückfragen: der erste ist der erwartete Schritt
+  // nach einem Import, der zweite kostet Geld für etwas, das schon dasteht.
+  if (wikiPages.value.length > 0) {
+    const ok = await askConfirm({
+      title: "Wiki-Artikel neu generieren?",
+      message:
+        `Die ${wikiPages.value.length} vorhandenen Artikel werden aus dem aktuellen ` +
+        `Dokumentstand fortgeschrieben, nicht ersetzt — es entstehen keine Duplikate. ` +
+        `Von Hand bearbeitete Seiten bleiben unangetastet. ` +
+        `Der Lauf kostet je nach Länge des Dokuments mehrere Minuten und LLM-Guthaben.`,
+      confirmText: "Neu generieren",
+      cancelText: "Abbrechen",
+      danger: false,
+    });
+    if (!ok) return;
+  }
+
   generating.value = true;
   genResult.value = "";
   try {
@@ -395,10 +444,12 @@ async function generateWiki() {
     );
     const pages = res.data.pages || [];
     if (pages.length > 0) {
-      genResult.value = "✅ " + pages.length + " Artikel erstellt";
+      genResult.value = `✅ ${pages.length} Artikel erstellt oder aktualisiert`;
     } else {
       genResult.value = "⚠️ Keine Artikel generiert";
     }
+    // Liste neu laden: nach einem erneuten Lauf können Seiten hinzugekommen sein.
+    await loadWikiPages();
   } catch (e: any) {
     genResult.value = "❌ " + (e.response?.data?.error || e.message);
   } finally {
@@ -591,6 +642,19 @@ function formatDate(dateStr: string) {
   margin-top: 0.5rem;
   font-size: 0.85rem;
   color: var(--color-primary);
+}
+.wiki-gen-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  /* Abstand zur Artikelliste darüber – ohne ihn klebt der Knopf am letzten
+     Listeneintrag und liest sich wie dessen Bedienelement. */
+  margin-top: 0.75rem;
+}
+.gen-note {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
 }
 .btn-lg {
   padding: 0.65rem 1.5rem;
