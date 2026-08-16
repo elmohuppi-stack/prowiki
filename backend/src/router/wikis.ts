@@ -48,10 +48,34 @@ const memberSchema = z.object({
   role: z.enum(ROLE_NAMES as [RoleName, ...RoleName[]]).default("viewer"),
 });
 
-/** Eigene Wikis. Ohne Anmeldung leer statt 401 — die Liste ist kein Geheimnis. */
+/**
+ * Eigene Wikis. Ohne Anmeldung leer statt 401 — die Liste ist kein Geheimnis.
+ *
+ * `?sort=` steuert die Reihenfolge (recent | name | created | updated). Ein
+ * unbekannter Wert fällt auf `recent` zurück, statt 400 zu werfen: die
+ * Sortierung ist eine Darstellungsfrage, kein Grund, die Liste zu verweigern.
+ */
 wikisRouter.get("/", async (c) => {
-  const list = await wikiService.listWikis(c.get("principal"));
-  return c.json({ wikis: list });
+  const raw = c.req.query("sort");
+  const sort = (wikiService.WIKI_SORTS as readonly string[]).includes(raw ?? "")
+    ? (raw as wikiService.WikiSort)
+    : "recent";
+  const list = await wikiService.listWikis(c.get("principal"), sort);
+  return c.json({ wikis: list, sort });
+});
+
+/**
+ * Vermerkt einen Besuch — die Datenbasis für die Sortierung „zuletzt
+ * verwendet". Ein eigener Aufruf statt eines Nebeneffekts in `GET /:id`, weil
+ * dieses GET auch von Hintergrundabfragen kommt (Wiki-Auswahl im Chat, Breadcrumb)
+ * und die Reihenfolge sonst von Dingen umgestellt würde, die niemand geöffnet hat.
+ */
+wikisRouter.post("/:id/visit", requireUser, async (c) => {
+  const id = c.req.param("id");
+  const principal = c.get("principal");
+  await requireWikiCapability(principal, id, "wiki.read");
+  await wikiService.touchWiki(principal.userId!, id);
+  return c.json({ success: true });
 });
 
 /**

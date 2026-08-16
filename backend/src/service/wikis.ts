@@ -17,7 +17,7 @@
  *      Kindtabellen in FK-sicherer Reihenfolge von Hand abgeräumt werden mussten.
  */
 import { db } from "../db/index.ts";
-import { user, wikis, wikiMembers, member } from "../db/schema.ts";
+import { user, wikis, wikiMembers, wikiVisits, member } from "../db/schema.ts";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { normalizeRole } from "../auth/roles.ts";
 import type { Principal } from "../middleware/access.ts";
@@ -40,7 +40,45 @@ export function slugify(name: string): string {
 export type WikiWithRole = typeof wikis.$inferSelect & {
   my_role: RoleName;
   organization_slug: string | null;
+  /** Wann *dieser* Nutzer das Wiki zuletzt geöffnet hat; null = noch nie. */
+  last_opened_at: Date | null;
 };
+
+/** Sortierschlüssel der Wiki-Übersicht. `recent` ist die Vorgabe. */
+export const WIKI_SORTS = ["recent", "name", "created", "updated"] as const;
+export type WikiSort = (typeof WIKI_SORTS)[number];
+
+/**
+ * Sortiert die Wiki-Liste. Läuft in JavaScript statt in SQL, weil listWikis die
+ * beiden Rechtequellen ohnehin erst im Speicher zusammenführt — eine
+ * ORDER-BY-Klausel würde nur eine der beiden Abfragen ordnen.
+ *
+ * `recent` stellt nie geöffnete Wikis nicht ans Ende, sondern sortiert sie
+ * untereinander nach Erstelldatum: ein frisch angelegtes Wiki wäre sonst genau
+ * dort unsichtbar, wo man es sucht.
+ */
+export function sortWikis(list: WikiWithRole[], sort: WikiSort): WikiWithRole[] {
+  const byName = (a: WikiWithRole, b: WikiWithRole) =>
+    a.name.localeCompare(b.name, "de");
+  const zeit = (d: Date | null | undefined) => (d ? new Date(d).getTime() : 0);
+
+  const sorted = [...list];
+  switch (sort) {
+    case "name":
+      return sorted.sort(byName);
+    case "created":
+      return sorted.sort((a, b) => zeit(b.created_at) - zeit(a.created_at));
+    case "updated":
+      return sorted.sort((a, b) => zeit(b.updated_at) - zeit(a.updated_at));
+    case "recent":
+    default:
+      return sorted.sort(
+        (a, b) =>
+          zeit(b.last_opened_at) - zeit(a.last_opened_at) ||
+          zeit(b.created_at) - zeit(a.created_at),
+      );
+  }
+}
 
 /**
  * Alle Wikis, die `principal` sehen darf, mit der jeweils geltenden Rolle.
@@ -48,7 +86,10 @@ export type WikiWithRole = typeof wikis.$inferSelect & {
  * Auflösung wie in middleware/access.ts: der Wiki-Override gewinnt gegen die
  * Organisationsrolle, damit Rechte pro Wiki auch *eingeschränkt* werden können.
  */
-export async function listWikis(principal: Principal): Promise<WikiWithRole[]> {
+export async function listWikis(
+  principal: Principal,
+  sort: WikiSort = "recent",
+): Promise<WikiWithRole[]> {
   if (!principal.userId) return [];
 
   const viaOrg = await db
@@ -64,12 +105,23 @@ export async function listWikis(principal: Principal): Promise<WikiWithRole[]> {
     .innerJoin(wikis, eq(wikis.id, wikiMembers.wiki_id))
     .where(eq(wikiMembers.user_id, principal.userId));
 
+  // Eine Abfrage für alle Besuche des Nutzers statt einer je Wiki.
+  const visits = await db
+    .select({
+      wiki_id: wikiVisits.wiki_id,
+      last_opened_at: wikiVisits.last_opened_at,
+    })
+    .from(wikiVisits)
+    .where(eq(wikiVisits.user_id, principal.userId));
+  const visitByWiki = new Map(visits.map((v) => [v.wiki_id, v.last_opened_at]));
+
   const byId = new Map<string, WikiWithRole>();
   for (const row of viaOrg) {
     byId.set(row.wiki.id, {
       ...row.wiki,
       my_role: normalizeRole(row.role),
       organization_slug: null,
+      last_opened_at: visitByWiki.get(row.wiki.id) ?? null,
     });
   }
   // Nach der Organisationsrolle eingespielt: der Override gewinnt.
@@ -78,10 +130,38 @@ export async function listWikis(principal: Principal): Promise<WikiWithRole[]> {
       ...row.wiki,
       my_role: normalizeRole(row.role),
       organization_slug: null,
+      last_opened_at: visitByWiki.get(row.wiki.id) ?? null,
     });
   }
 
-  return [...byId.values()];
+  return sortWikis([...byId.values()], sort);
+}
+
+/**
+ * Vermerkt, dass `userId` das Wiki gerade geöffnet hat.
+ *
+ * Upsert statt Insert: eine Zeile je Paar, sonst wüchse die Tabelle mit jedem
+ * Seitenaufruf. Fehler werden geschluckt — ein misslungener Besuchsvermerk darf
+ * das Öffnen eines Wikis nicht scheitern lassen.
+ */
+export async function touchWiki(
+  userId: string,
+  wikiId: string,
+): Promise<void> {
+  try {
+    await db
+      .insert(wikiVisits)
+      .values({ user_id: userId, wiki_id: wikiId })
+      .onConflictDoUpdate({
+        target: [wikiVisits.user_id, wikiVisits.wiki_id],
+        set: {
+          last_opened_at: new Date(),
+          visit_count: sql`${wikiVisits.visit_count} + 1`,
+        },
+      });
+  } catch (e: any) {
+    console.warn(`[wikis] Besuch nicht vermerkt (${wikiId}):`, e.message);
+  }
 }
 
 export async function getWiki(id: string) {

@@ -2,7 +2,16 @@
   <main class="main-content">
     <div class="header">
       <h3>📁 Wikis</h3>
-      <button class="btn-primary" @click="showCreate = true">+ Neu</button>
+      <div class="header-actions">
+        <label class="sort-label" for="wiki-sort">Sortierung</label>
+        <select id="wiki-sort" v-model="sort" @change="onSortChange" class="sort-select">
+          <option value="recent">Zuletzt verwendet</option>
+          <option value="name">Name (A–Z)</option>
+          <option value="created">Neueste zuerst</option>
+          <option value="updated">Zuletzt geändert</option>
+        </select>
+        <button class="btn-primary" @click="showCreate = true">+ Neu</button>
+      </div>
     </div>
 
     <div class="content">
@@ -31,7 +40,9 @@
             <span class="ws-badge" v-if="ws.indexing_strategy?.vector_enabled"
               >🔍 Vector</span
             >
-            <span class="ws-date">{{ formatDate(ws.created_at) }}</span>
+            <span class="ws-date" :title="dateTitle(ws)">{{
+              dateLabel(ws)
+            }}</span>
           </div>
         </div>
       </div>
@@ -86,6 +97,16 @@ const newName = ref("");
 const newDesc = ref("");
 const createError = ref("");
 
+/**
+ * Die gewählte Sortierung überdauert den Seitenwechsel — wer einmal auf Name
+ * umgestellt hat, will nicht bei jedem Aufruf zurückgesetzt werden. Vorgabe ist
+ * „zuletzt verwendet"; sortiert wird im Backend (siehe service/wikis.ts).
+ */
+const SORT_KEY = "prowiki-wiki-sort";
+const SORTS = ["recent", "name", "created", "updated"];
+const gespeichert = localStorage.getItem(SORT_KEY) || "";
+const sort = ref(SORTS.includes(gespeichert) ? gespeichert : "recent");
+
 onMounted(async () => {
   if (!auth.isAuthenticated) {
     router.push("/login");
@@ -94,9 +115,16 @@ onMounted(async () => {
   await loadWikis();
 });
 
+async function onSortChange() {
+  localStorage.setItem(SORT_KEY, sort.value);
+  await loadWikis();
+}
+
 async function loadWikis() {
   try {
-    const res = await axios.get("/api/v1/wikis");
+    const res = await axios.get("/api/v1/wikis", {
+      params: { sort: sort.value },
+    });
     wikis.value = res.data.wikis || [];
   } catch (e: any) {
     console.error("Failed to load wikis", e);
@@ -112,10 +140,12 @@ async function createWiki() {
       name: newName.value,
       description: newDesc.value || undefined,
     });
-    wikis.value.push(res.data.wiki);
     showCreate.value = false;
     newName.value = "";
     newDesc.value = "";
+    // Neu laden statt anhängen: nur so steht der neue Eintrag an der Stelle,
+    // die der gewählten Sortierung entspricht.
+    await loadWikis();
   } catch (e: any) {
     createError.value = e.response?.data?.error || "Fehler beim Erstellen";
   }
@@ -127,6 +157,31 @@ function formatDate(dateStr: string) {
     month: "2-digit",
     year: "numeric",
   });
+}
+
+/**
+ * Das Datum auf der Karte zeigt, wonach gerade sortiert wird — sonst stünde in
+ * der Reihenfolge „zuletzt verwendet" ein Erstelldatum, das die Reihenfolge
+ * scheinbar widerlegt.
+ */
+function dateLabel(ws: any) {
+  if (sort.value === "recent" && ws.last_opened_at) {
+    return formatDate(ws.last_opened_at);
+  }
+  if (sort.value === "updated" && ws.updated_at) {
+    return formatDate(ws.updated_at);
+  }
+  return formatDate(ws.created_at);
+}
+
+function dateTitle(ws: any) {
+  if (sort.value === "recent") {
+    return ws.last_opened_at
+      ? `Zuletzt geöffnet: ${formatDate(ws.last_opened_at)}`
+      : `Noch nie geöffnet · angelegt am ${formatDate(ws.created_at)}`;
+  }
+  if (sort.value === "updated") return `Zuletzt geändert`;
+  return `Angelegt am ${formatDate(ws.created_at)}`;
 }
 </script>
 
@@ -141,6 +196,24 @@ function formatDate(dateStr: string) {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.sort-label {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+.sort-select {
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+  font-size: 0.85rem;
+  font-family: inherit;
 }
 .content {
   padding: 1.5rem;
@@ -275,6 +348,12 @@ function formatDate(dateStr: string) {
   .header {
     padding: 0.75rem 1rem;
     gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  /* Auf dem Handy fehlt für „Sortierung“ + Auswahl + Button die Breite —
+     das Wort entfällt, die Auswahl bleibt beschriftet genug. */
+  .sort-label {
+    display: none;
   }
   .content {
     padding: 1rem;

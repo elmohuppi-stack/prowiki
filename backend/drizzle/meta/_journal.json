@@ -15,6 +15,13 @@
       "when": 1785676641286,
       "tag": "0001_collate_and_search_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785676642286,
+      "tag": "0002_wiki_visits",
+      "breakpoints": true
     }
   ]
 }

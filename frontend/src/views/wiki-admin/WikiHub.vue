@@ -107,6 +107,10 @@ async function loadCurrentWiki() {
     ws.value = data;
     // Dropdown-Auswahl auf die aufgelöste UUID setzen, damit sie in der Liste matcht.
     selectedWikiId.value = data.id;
+    // Besuch vermerken – Grundlage der Sortierung „zuletzt verwendet" in der
+    // Übersicht. Bewusst ohne await: die Ansicht wartet nicht darauf, und ein
+    // Fehler hier darf das Öffnen nicht stören.
+    axios.post(`/api/v1/wikis/${data.id}/visit`).catch(() => {});
   } catch (e: any) {
     console.error("[hub] Fehler beim Laden des Wiki:", e.message);
   }

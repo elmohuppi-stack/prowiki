@@ -155,6 +155,37 @@ export const wikiMembers = pgTable(
 );
 
 /**
+ * Wann hat wer welches Wiki zuletzt geöffnet — die Grundlage für die
+ * Vorgabesortierung „zuletzt verwendet" in der Wiki-Übersicht.
+ *
+ * Bewusst pro Nutzer und nicht als Spalte an `wikis`: „zuletzt verwendet" ist
+ * eine persönliche Größe. Eine gemeinsame Spalte würde die Reihenfolge jedes
+ * Nutzers umsortieren, sobald irgendein Kollege ein Wiki öffnet.
+ *
+ * Eine Zeile je (Nutzer, Wiki), per Upsert überschrieben — kein Verlauf, damit
+ * die Tabelle nicht mit jedem Seitenaufruf wächst.
+ */
+export const wikiVisits = pgTable(
+  "wiki_visits",
+  {
+    user_id: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    wiki_id: varchar("wiki_id", { length: 36 })
+      .notNull()
+      .references(() => wikis.id, { onDelete: "cascade" }),
+    last_opened_at: timestamp("last_opened_at").defaultNow().notNull(),
+    // Wie oft insgesamt — als Reserve für eine spätere Sortierung nach
+    // Häufigkeit statt nach Aktualität.
+    visit_count: integer("visit_count").default(1).notNull(),
+  },
+  (t) => [
+    uniqueIndex("wiki_visits_user_wiki_unique").on(t.user_id, t.wiki_id),
+    index("wiki_visits_user_time_idx").on(t.user_id, t.last_opened_at),
+  ],
+);
+
+/**
  * Kostenzählung je Organisation (KONZEPT 4.5). knora protokollierte nur
  * `duration_ms` — niemand konnte sagen, was ein Import gekostet hat. Ohne diese
  * Tabelle ist kein Tarif und kein anonymer Chat kalkulierbar.
