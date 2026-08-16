@@ -134,7 +134,7 @@ function switchWiki() {
     selectedWikiId.value &&
     selectedWikiId.value !== wikiId.value
   ) {
-    localStorage.setItem("knora-last-wiki", selectedWikiId.value);
+    localStorage.setItem("prowiki-last-wiki", selectedWikiId.value);
     router.push(`/wikis/${selectedWikiId.value}/documents`);
   }
 }

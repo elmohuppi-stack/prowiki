@@ -2,9 +2,9 @@
   <div class="login-page">
     <div class="login-card">
       <div class="login-logo">
-        <div class="logo-icon">🧠</div>
-        <h1>Knora</h1>
-        <p class="subtitle">Deine persönliche Wissensdatenbank</p>
+        <div class="logo-icon">📖</div>
+        <h1>prowiki</h1>
+        <p class="subtitle">Durchsuchbares Wissen aus deinen Quellen</p>
       </div>
 
       <form @submit.prevent="handleSubmit" class="login-form">

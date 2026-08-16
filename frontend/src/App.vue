@@ -5,7 +5,7 @@
     <aside class="app-sidebar" :class="{ collapsed: sidebarCollapsed }">
       <div class="sidebar-header">
         <router-link to="/" class="sidebar-logo"
-          >🧠 <span class="logo-text">Knora</span></router-link
+          >📖 <span class="logo-text">prowiki</span></router-link
         >
         <button
           class="sidebar-toggle"
@@ -86,9 +86,9 @@ const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
 
-const isDark = ref(localStorage.getItem("knora-theme") === "dark");
+const isDark = ref(localStorage.getItem("prowiki-theme") === "dark");
 const sidebarCollapsed = ref(
-  localStorage.getItem("knora-sidebar") === "collapsed",
+  localStorage.getItem("prowiki-sidebar") === "collapsed",
 );
 
 const isWikisRoute = computed(() =>
@@ -96,11 +96,11 @@ const isWikisRoute = computed(() =>
 );
 
 // Zuletzt aktiven Wiki für Direktsprung merken
-const lastWikiId = ref(localStorage.getItem("knora-last-wiki") || "");
+const lastWikiId = ref(localStorage.getItem("prowiki-last-wiki") || "");
 
 watch(lastWikiId, (v) => {
-  if (v) localStorage.setItem("knora-last-wiki", v);
-  else localStorage.removeItem("knora-last-wiki");
+  if (v) localStorage.setItem("prowiki-last-wiki", v);
+  else localStorage.removeItem("prowiki-last-wiki");
 });
 
 // Wenn wir in einem Wiki-Kontext sind, speichern wir die ID
@@ -112,7 +112,7 @@ watch(
 );
 
 watch(sidebarCollapsed, (v) => {
-  localStorage.setItem("knora-sidebar", v ? "collapsed" : "expanded");
+  localStorage.setItem("prowiki-sidebar", v ? "collapsed" : "expanded");
 });
 
 onMounted(() => {
@@ -125,7 +125,7 @@ onMounted(() => {
 
 watch(isDark, () => {
   applyTheme();
-  localStorage.setItem("knora-theme", isDark.value ? "dark" : "light");
+  localStorage.setItem("prowiki-theme", isDark.value ? "dark" : "light");
 });
 
 function applyTheme() {
@@ -140,7 +140,7 @@ function toggleTheme() {
 }
 
 function openWikis() {
-  const lastId = localStorage.getItem("knora-last-wiki");
+  const lastId = localStorage.getItem("prowiki-last-wiki");
   if (lastId) {
     router.push(`/wikis/${lastId}/documents`);
   } else {

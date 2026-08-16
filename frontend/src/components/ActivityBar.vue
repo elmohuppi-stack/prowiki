@@ -63,7 +63,7 @@ let wasRunning = false;
 const wikiId = computed(() => {
   const fromRoute = route.params.id as string | undefined;
   if (fromRoute) return fromRoute;
-  return localStorage.getItem("knora-last-wiki") || "";
+  return localStorage.getItem("prowiki-last-wiki") || "";
 });
 
 const latest = computed(() => activities.value[0] || null);

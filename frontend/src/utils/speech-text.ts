@@ -198,7 +198,7 @@ function cleanInline(input: string): string {
   });
 
   // Inline-Code und Hervorhebungen (einzelne _ bleiben stehen:
-  // snake_case-Bezeichner sind in Knora-Artikeln häufiger als _kursiv_)
+  // snake_case-Bezeichner sind in prowiki-Artikeln häufiger als _kursiv_)
   text = text.replace(/`([^`]+)`/g, "$1");
   text = text.replace(/\*\*([^*]+)\*\*/g, "$1");
   text = text.replace(/__([^_]+)__/g, "$1");

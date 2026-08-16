@@ -6,8 +6,8 @@
 // alle Browser hinweg zuverlässig.
 import { computed, onUnmounted, ref } from "vue";
 
-const RATE_KEY = "knora.speech.rate";
-const VOICE_KEY = "knora.speech.voice";
+const RATE_KEY = "prowiki.speech.rate";
+const VOICE_KEY = "prowiki.speech.voice";
 const MAX_CONSECUTIVE_ERRORS = 3;
 // Chrome ignoriert ein speak() direkt nach cancel() – minimal verzögert starten.
 const RESTART_DELAY_MS = 60;
