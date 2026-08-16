@@ -11,15 +11,11 @@
       über Einladungen (Stufe 3). Diese Seite zeigt daher, was heute wirklich
       pro Organisation verwaltbar ist.
     -->
-    <div v-if="!auth.can('settings.manage')" class="empty">
-      <p>
-        Für die Einstellungen dieser Organisation fehlt dir die Berechtigung
-        <code>settings.manage</code>.
-      </p>
-    </div>
-
-    <template v-else>
-      <div class="tabs">
+    <!-- "Mein Konto" hängt bewusst NICHT an settings.manage: das eigene Passwort
+         zu ändern muss jeder können, auch ein viewer. Nur die beiden
+         Organisations-Reiter sind an die Capability gebunden. -->
+    <div class="tabs">
+      <template v-if="canManageOrg">
         <button
           :class="['tab', { active: tab === 'models' }]"
           @click="tab = 'models'"
@@ -32,8 +28,17 @@
         >
           👥 Mitglieder
         </button>
-      </div>
+      </template>
 
+      <button
+        :class="['tab', { active: tab === 'account' }]"
+        @click="tab = 'account'"
+      >
+        🔑 Mein Konto
+      </button>
+    </div>
+
+    <template v-if="canManageOrg">
       <!-- ------------------------------------------------------ Modelle -->
       <div v-if="tab === 'models'" class="content">
         <div class="section-head">
@@ -98,6 +103,16 @@
           allen Wikis darf; einzelne Wikis können sie überschreiben. Einladen
           und Rollen ändern kommt mit dem Mailversand.
         </p>
+        <!-- Ohne diesen Satz liest sich die Tabelle falsch herum: "admin" klingt
+             nach der stärkeren Rolle, ist aber die zweite. owner hat alles, was
+             admin hat, plus Abrechnung und das Löschen der Organisation. -->
+        <p class="hint">
+          Rangfolge:
+          <strong>owner</strong> → admin → editor → author → reviewer → viewer.
+          <em>owner</em> ist die höchste Rolle — sie unterscheidet sich von
+          <em>admin</em> nur durch <code>billing.manage</code> und das Recht, die
+          Organisation zu löschen.
+        </p>
 
         <div v-if="loadingMembers" class="loading">Lade Mitglieder …</div>
         <table v-else class="tbl">
@@ -110,13 +125,18 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="m in members" :key="m.id">
+            <tr v-for="m in sortedMembers" :key="m.id">
               <td>
                 <strong>{{ m.name }}</strong>
                 <span v-if="m.id === auth.user?.id" class="sub"> (du)</span>
               </td>
               <td>{{ m.email }}</td>
-              <td><span class="pill role">{{ m.role }}</span></td>
+              <td>
+                <span class="pill role" :class="{ top: m.role === 'owner' }">
+                  {{ m.role }}
+                </span>
+                <span v-if="m.role === 'owner'" class="sub"> höchste Rolle</span>
+              </td>
               <td class="right">
                 <button
                   v-if="auth.can('member.delete') && m.id !== auth.user?.id"
@@ -131,7 +151,45 @@
         </table>
         <p v-if="memberError" class="error">{{ memberError }}</p>
       </div>
+
     </template>
+
+    <!-- ------------------------------------------------------- Mein Konto -->
+    <div v-if="tab === 'account'" class="content">
+      <p class="hint">
+        Passwort ändern. Solange es keinen Mailversand gibt, ist das der
+        bequeme Weg — „Passwort vergessen" schickt den Link sonst nur ins
+        Server-Log.
+      </p>
+
+      <form class="pw-form" @submit.prevent="askChangePassword">
+        <div class="field">
+          <label>Aktuelles Passwort</label>
+          <input v-model="pw.current" type="password" autocomplete="current-password" />
+        </div>
+        <div class="field">
+          <label>Neues Passwort</label>
+          <input v-model="pw.next" type="password" autocomplete="new-password" />
+          <!-- Dieselbe Untergrenze wie im Backend (minPasswordLength: 12).
+               Steht sie nur dort, sieht der Nutzer erst nach dem Absenden,
+               dass sein Passwort zu kurz war. -->
+          <p class="field-hint">Mindestens 12 Zeichen.</p>
+        </div>
+        <div class="field">
+          <label>Neues Passwort wiederholen</label>
+          <input v-model="pw.repeat" type="password" autocomplete="new-password" />
+        </div>
+
+        <p v-if="pwError" class="error">{{ pwError }}</p>
+        <p v-if="pwDone" class="success">
+          Passwort geändert. Andere Sitzungen wurden beendet.
+        </p>
+
+        <button class="btn-primary" type="submit" :disabled="!pwValid || pwBusy">
+          {{ pwBusy ? "Wird geändert …" : "Passwort ändern" }}
+        </button>
+      </form>
+    </div>
 
     <!-- ------------------------------------------------ Anbieter-Dialog -->
     <div v-if="showForm" class="dialog-overlay" @click.self="showForm = false">
@@ -211,7 +269,83 @@ const TYPE_LABELS: Record<string, string> = {
   both: "Beides",
 };
 
-const tab = ref<"models" | "members">("models");
+const canManageOrg = computed(() => auth.can("settings.manage"));
+
+// Wer die Organisation nicht verwalten darf, sieht nur "Mein Konto" — dann ist
+// das auch der Startreiter, sonst zeigte die Seite eine leere Fläche.
+const tab = ref<"models" | "members" | "account">(
+  auth.can("settings.manage") ? "models" : "account",
+);
+
+/** Höchste Rolle zuerst — die Tabelle soll die Rangfolge abbilden, nicht den Namen. */
+const ROLE_ORDER = ["owner", "admin", "editor", "author", "reviewer", "viewer"];
+const sortedMembers = computed(() =>
+  [...members.value].sort(
+    (a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role),
+  ),
+);
+
+const pw = ref({ current: "", next: "", repeat: "" });
+const pwError = ref("");
+const pwDone = ref(false);
+const pwBusy = ref(false);
+
+const pwValid = computed(
+  () =>
+    pw.value.current.length > 0 &&
+    pw.value.next.length >= 12 &&
+    pw.value.next === pw.value.repeat,
+);
+
+/**
+ * Bewusst mit Rückfrage: die Änderung beendet alle anderen Sitzungen. Wer sie
+ * versehentlich auslöst, fliegt auf seinen übrigen Geräten raus.
+ */
+async function askChangePassword() {
+  pwError.value = "";
+  pwDone.value = false;
+
+  if (pw.value.next !== pw.value.repeat) {
+    pwError.value = "Die beiden neuen Passwörter stimmen nicht überein.";
+    return;
+  }
+  if (pw.value.next.length < 12) {
+    pwError.value = "Das neue Passwort muss mindestens 12 Zeichen haben.";
+    return;
+  }
+
+  const ok = await askConfirm({
+    title: "Passwort ändern",
+    message:
+      "Das Passwort wird sofort ersetzt und alle anderen Sitzungen werden beendet. " +
+      "Auf anderen Geräten musst du dich danach neu anmelden.",
+    confirmText: "Ändern",
+    danger: false,
+  });
+  if (!ok) return;
+
+  pwBusy.value = true;
+  const { error } = await authClient.changePassword({
+    currentPassword: pw.value.current,
+    newPassword: pw.value.next,
+    revokeOtherSessions: true,
+  });
+  pwBusy.value = false;
+
+  if (error) {
+    // Häufigster Fall: das aktuelle Passwort stimmt nicht. Better Auth antwortet
+    // darauf mit 401 und einer englischen Meldung — nachgemessen, nicht geraten:
+    // 400 wäre die naheliegende Annahme gewesen und ist falsch.
+    pwError.value =
+      error.status === 401 || error.status === 400
+        ? "Das aktuelle Passwort ist nicht korrekt."
+        : (error.message ?? "Ändern fehlgeschlagen");
+    return;
+  }
+
+  pw.value = { current: "", next: "", repeat: "" };
+  pwDone.value = true;
+}
 
 const providers = ref<any[]>([]);
 const members = ref<any[]>([]);
@@ -248,7 +382,7 @@ onMounted(load);
 watch(orgId, load);
 
 async function load() {
-  if (!orgId.value || !auth.can("settings.manage")) {
+  if (!orgId.value || !canManageOrg.value) {
     loadingModels.value = false;
     loadingMembers.value = false;
     return;
@@ -480,6 +614,25 @@ async function removeMember(m: any) {
 }
 .pill.role {
   cursor: default;
+}
+.pill.role.top {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.pw-form {
+  max-width: 24rem;
+}
+.field-hint {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  margin-top: 0.25rem;
+}
+.success {
+  color: #16a34a;
+  margin: 0.75rem 0;
+  font-size: 0.875rem;
 }
 .btn-link {
   background: none;
