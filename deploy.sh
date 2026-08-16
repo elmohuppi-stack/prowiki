@@ -8,7 +8,7 @@ set -euo pipefail
 # einen fremden Branch ausgecheckt. Der Zielpfad hängt deshalb am APP_SLUG und
 # wird vor jedem Lauf gegengeprüft.
 #
-# Voraussetzungen auf dem Server (siehe optimize-hetzner/ARCHITEKTUR.md 11):
+# Voraussetzungen auf dem Server (siehe platform/ARCHITEKTUR.md 11):
 #   - /var/www/prowiki ist ein Git-Checkout dieses Repos
 #   - .env liegt dort mit Mode 600
 #   - Datenbank + unprivilegierte Rolle sind angelegt

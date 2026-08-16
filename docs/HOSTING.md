@@ -175,18 +175,18 @@ Gegenüber den LLM-Kosten eines einzigen vollständigen Kanal-Imports der kleine
 
 ---
 
-## 3. Verhältnis zum bestehenden Server `helsinki-80gb`
+## 3. Verhältnis zum bestehenden Server `nuernberg-16gb`
 
 Der Hausleitfaden für den bestehenden Server steht in
-`~/workspace/optimize-hetzner` — [`ARCHITEKTUR.md`](../../optimize-hetzner/ARCHITEKTUR.md)
-(Sollzustand), [`DEPLOYMENT.md`](../../optimize-hetzner/DEPLOYMENT.md) (Bedienung),
-[`OFFENE-PROBLEME.md`](../../optimize-hetzner/OFFENE-PROBLEME.md) (Ist-Abweichungen).
+`~/workspace/platform` — [`ARCHITEKTUR.md`](../../platform/ARCHITEKTUR.md)
+(Sollzustand), [`DEPLOYMENT.md`](../../platform/DEPLOYMENT.md) (Bedienung),
+[`OFFENE-PROBLEME.md`](../../platform/OFFENE-PROBLEME.md) (Ist-Abweichungen).
 prowiki hält sich daran, auch wenn es später auf einer eigenen Maschine läuft: die Regeln
 sind aus realen Ausfällen abgeleitet, nicht aus Geschmack.
 
 ### Eigene Postgres-Instanz — kein Verstoß gegen die Hausregel
 
-`ARCHITEKTUR.md` verbietet Apps auf `helsinki-80gb` einen eigenen Postgres-Container
+`ARCHITEKTUR.md` verbietet Apps auf `nuernberg-16gb` einen eigenen Postgres-Container
 (Abschnitt 12) und verlangt „geteilte Infrastruktur, getrennte Daten". Das gilt **für Apps
 auf diesem Host**. prowiki zieht auf eine eigene Maschine (Abschnitt 2) und bringt dort
 seine eigene Instanz mit — das ist kein Nebeneinander zweier Postmaster auf einem Host,
@@ -209,9 +209,9 @@ sondern eine getrennte Umgebung.
 | Pool-Obergrenze explizit setzen | ARCH 4.2 | `DB_POOL_MAX`, Default 10 statt der 20 aus knora |
 | Kanonischer DB-Hostname, kein `db`/`postgres` | ARCH 4.3 | `pg-shared` bzw. der Instanzname; nie ein generischer Alias |
 | Nur vorhandene Extensions voraussetzen | ARCH 4.4 | `vector`, `pg_trgm` — beide im Image `pgvector/pgvector:pg17` |
-| Portblock aus der Vergabeliste | ARCH 5 | **3101 / 3102** (dort als nächste freie Vergabe geführt) |
+| Portblock aus der Vergabeliste | ARCH 5 | **3121 / 3122**. Beim Schreiben dieses Dokuments war 3101 die nächste freie Vergabe; wandervogel hat ihn genommen, bevor prowiki so weit war |
 | Ports nur auf `127.0.0.1`, DB gar nicht | ARCH 6 | Prod- und Dev-Compose gebunden, DB nie auf `0.0.0.0` |
-| `hetzner-network` als `external: true`, `- default` mitlisten | ARCH 6 | aus knora übernommen und erfüllt |
+| `apps-net` als `external: true`, `- default` mitlisten | ARCH 6 | aus knora übernommen und erfüllt. **Das Netz hieß bis zum Umzug `hetzner-network`**; der alte Name im ersten Compose-Stand war ein Blocker beim Livegang ([LIVEGANG 2.2](./LIVEGANG.md)) |
 | Eigener Healthcheck gegen die eigene App | ARCH 6, 10 | `/health` mit `select 1`, 503 im Fehlerfall |
 | `mem_limit` überall | ARCH 8 | app 768 MB, frontend 128 MB, parser 1 GB; Worker kommt dazu |
 | Indexe gehören in die Migration, auch die teuren | ARCH 7.1 | HNSW mit `vector_cosine_ops` in der ersten Migration, nicht als Kommentar |
@@ -224,10 +224,10 @@ sondern eine getrennte Umgebung.
 ### Vor dem ersten Deploy zu erledigen
 
 - [ ] Datenbank + Rolle `prowiki_app` anlegen, `REVOKE CONNECT … FROM PUBLIC`
-- [ ] Portblock 3101/3102 gegen `sites-available` gegenprüfen (nicht `sites-enabled` —
+- [x] Portblock 3121/3122 gegen `sites-available` gegenprüfen (nicht `sites-enabled` —
       daraus entstand die openclaw/knora-Kollision)
 - [ ] nginx-Vhost **und** Symlink, Zertifikat per certbot
 - [ ] `/var/www/prowiki` als Git-Checkout, `.env` mit Mode `600`
 - [ ] Backup samt Restore-Test einrichten, bevor Kundendaten darauf liegen
-- [ ] Deploy-Weg in `optimize-hetzner/DEPLOYMENT.md` ergänzen
+- [x] Deploy-Weg in `platform/DEPLOYMENT.md` ergänzen — **16.08.**, samt Zeile in der App-Tabelle
 

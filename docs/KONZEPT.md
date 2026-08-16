@@ -115,7 +115,7 @@ dieses Wiki öffentlich verfügbar" — hat aktuell keinen einzigen Anknüpfungs
   Router-Parameter fehlt. Pragmatisch, aber die Autorisierung sollte nicht an einem
   Regex über dem Pfad hängen.
 - ~~Der DB-Nutzer der App ist auf dem Server **SUPERUSER**.~~ **Erledigt am 2. August**
-  (`optimize-hetzner/OFFENE-PROBLEME.md` Punkt 5): knora verbindet sich seit dem Umbau als
+  (`platform/OFFENE-PROBLEME.md` Punkt 5): knora verbindet sich seit dem Umbau als
   unprivilegierte Rolle `knora_app`; `knora` ist nur noch Bootstrap- und Wartungsrolle und
   gehört in keinen Verbindungsstring. Für prowiki gilt dieselbe Regel von Anfang an — eine
   eigene, unprivilegierte Rolle je Datenbank, ohne SUPERUSER, CREATEROLE, CREATEDB,

@@ -10,7 +10,7 @@ const connectionString = process.env.DATABASE_URL!;
  * Auf einer geteilten Postgres-Instanz ist das ein Budget, kein Wunsch:
  * `max_connections` liegt dort bei 100 für alle Apps zusammen, und `work_mem`
  * fällt pro Verbindung und Sortierknoten an. Der Leitfaden des Servers
- * (optimize-hetzner/ARCHITEKTUR.md 4.2) gibt einer neuen App 5–10 und sagt:
+ * (platform/ARCHITEKTUR.md 4.2) gibt einer neuen App 5–10 und sagt:
  * erst messen, dann erhöhen. Ein ORM ohne Konfiguration öffnet sonst so viele
  * Verbindungen wie Worker-Threads, und bei drei Apps mit dieser Haltung fallen
  * alle gleichzeitig aus.
