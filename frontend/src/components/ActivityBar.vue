@@ -50,8 +50,10 @@
 import { ref, computed, watch, onUnmounted } from "vue";
 import { useRoute } from "vue-router";
 import axios from "axios";
+import { useWiki } from "../composables/useWiki";
 
 const route = useRoute();
+const { resolveWiki, isUUID } = useWiki();
 const expanded = ref(false);
 const activities = ref<any[]>([]);
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -59,12 +61,38 @@ let timer: ReturnType<typeof setInterval> | null = null;
 // der steigenden Flanke (Ruhe → Aktivität) automatisch aufgeklappt wird.
 let wasRunning = false;
 
-// Aktive Wiki-ID aus Route (oder gemerkter letzter Wiki).
-const wikiId = computed(() => {
+// Bezeichner aus der Route — kann UUID *oder* Slug sein ("/wikis/politik").
+const wikiRef = computed(() => {
   const fromRoute = route.params.id as string | undefined;
   if (fromRoute) return fromRoute;
   return localStorage.getItem("prowiki-last-wiki") || "";
 });
+
+// Die API kennt nur UUIDs. Ein Slug wird deshalb einmal aufgelöst und gemerkt,
+// statt bei jedem Poll erneut — sonst schickt die Leiste im Sekundentakt
+// Anfragen, die zuverlässig mit 404 zurückkommen.
+const resolvedId = ref("");
+const slugCache = new Map<string, string>();
+
+watch(
+  wikiRef,
+  async (bezeichner) => {
+    if (!bezeichner) return (resolvedId.value = "");
+    if (isUUID(bezeichner)) return (resolvedId.value = bezeichner);
+
+    const gemerkt = slugCache.get(bezeichner);
+    if (gemerkt) return (resolvedId.value = gemerkt);
+
+    const wiki = await resolveWiki(bezeichner);
+    if (!wiki) return (resolvedId.value = "");
+    slugCache.set(bezeichner, wiki.id);
+    // Zwischenzeitlicher Wechsel des Wikis darf nicht überschrieben werden.
+    if (wikiRef.value === bezeichner) resolvedId.value = wiki.id;
+  },
+  { immediate: true },
+);
+
+const wikiId = computed(() => resolvedId.value);
 
 const latest = computed(() => activities.value[0] || null);
 const running = computed(() =>

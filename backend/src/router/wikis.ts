@@ -54,6 +54,50 @@ wikisRouter.get("/", async (c) => {
   return c.json({ wikis: list });
 });
 
+/**
+ * Auflösung eines Wiki-Slugs. Die Oberfläche adressiert Wikis lesbar
+ * (`/wikis/politik`) und braucht daraus die UUID für alle weiteren Aufrufe.
+ *
+ * Slugs sind nur *je Organisation* eindeutig (`wikis_org_slug_unique`) — ohne
+ * Org im Pfad ist die Auflösung deshalb an den Nutzer gebunden: gesucht wird
+ * unter den Wikis, die er ohnehin sehen darf. Ist der Slug dort mehrfach
+ * vergeben (zwei Organisationen, beide mit "archiv"), ist die Anfrage
+ * mehrdeutig und wird als solche beantwortet, statt eine Organisation zu raten.
+ *
+ * Öffentliche Wikis Fremder sind hierüber nicht erreichbar; die bekommen mit
+ * der Lese-Seite in Stufe 2 den Adressraum /<org>/<wiki>.
+ *
+ * Muss vor "/:id" stehen? Nein — zwei Pfadsegmente kollidieren nicht mit einem.
+ */
+wikisRouter.get("/by-slug/:slug", async (c) => {
+  const slug = c.req.param("slug");
+  const principal = c.get("principal");
+
+  // Bewusst über listWikis statt über eine eigene Abfrage: die Sichtbarkeits-
+  // und Rollenauflösung soll an genau einer Stelle stehen.
+  const treffer = (await wikiService.listWikis(principal)).filter(
+    (w) => w.slug === slug,
+  );
+
+  if (treffer.length === 0) {
+    return c.json({ error: "Wiki nicht gefunden" }, 404);
+  }
+  if (treffer.length > 1) {
+    return c.json(
+      {
+        error: `Slug "${slug}" ist in mehreren Organisationen vergeben`,
+        candidates: treffer.map((w) => ({
+          id: w.id,
+          organization_id: w.organization_id,
+        })),
+      },
+      409,
+    );
+  }
+
+  return c.json({ wiki: treffer[0] });
+});
+
 wikisRouter.get("/:id", async (c) => {
   const id = c.req.param("id");
   // Die Capability-Prüfung deckt auch anonymen Zugriff auf öffentliche Wikis ab
