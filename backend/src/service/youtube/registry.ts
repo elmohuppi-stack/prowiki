@@ -134,10 +134,17 @@ function createDirectProvider(): YouTubeProvider {
         const text = snippets.map((s: any) => s.text).join(" ");
         const language = snippets[0]?.lang || "unknown";
 
+        // `offset`/`duration` liefert die Bibliothek mit; sie wurden hier bisher
+        // verworfen. parseSegmentArray entscheidet die Einheit anhand der
+        // Feldnamen – bei youtube-transcript sind es Millisekunden.
+        const { parseSegmentArray } = await import("./segments.ts");
+        const segments = parseSegmentArray(snippets);
+
         return {
           content: text,
           language,
           source: "native" as const,
+          segments,
         };
       } catch (e: any) {
         console.warn(`[youtube] Transcript fetch failed:`, e.message);

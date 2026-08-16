@@ -11,7 +11,9 @@ import type {
   YouTubeProvider,
   TranscriptResult,
   MetadataResult,
+  TranscriptSegment,
 } from "./types.ts";
+import { parseSegmentArray } from "./segments.ts";
 
 const SUPADATA_BASE = "https://api.supadata.ai/v1";
 const REQUEST_TIMEOUT = 60_000;
@@ -48,10 +50,23 @@ interface SupadataMetadataResponse {
   };
 }
 
+/**
+ * `content` ist bei `text=false` kein String, sondern die Segmentliste
+ * (`{ text, offset, duration, lang }`, Zeiten in Millisekunden). Genau deshalb
+ * wird dieser Endpunkt jetzt ohne `text=true` aufgerufen — der Fließtext lässt
+ * sich aus den Segmenten zusammensetzen, umgekehrt nicht.
+ */
 interface SupadataTranscriptResponse {
-  content: string;
+  content: string | SupadataChunk[];
   lang: string;
   availableLangs: string[];
+}
+
+interface SupadataChunk {
+  text: string;
+  offset: number;
+  duration: number;
+  lang?: string;
 }
 
 interface SupadataJobResponse {
@@ -60,9 +75,31 @@ interface SupadataJobResponse {
 
 interface SupadataJobStatusResponse {
   status: string;
-  content: string;
+  content: string | SupadataChunk[];
   lang: string;
   error?: string;
+}
+
+/**
+ * Antwort-`content` in Fließtext plus Zeitmarken zerlegen.
+ *
+ * Supadata antwortet je nach Abfrage mit einem String oder einer Segmentliste.
+ * Beim String bleibt es beim bisherigen Verhalten (Text ohne Zeitmarken), damit
+ * eine Formatänderung der API den Import nicht bricht.
+ */
+function aufbereiten(content: string | SupadataChunk[]): {
+  content: string;
+  segments: TranscriptSegment[];
+} {
+  if (typeof content === "string") return { content, segments: [] };
+
+  // `offset`/`duration` sind laut API bereits Millisekunden; parseSegmentArray
+  // erkennt das an den Feldnamen und über die Größenordnung.
+  const segments = parseSegmentArray(content);
+  return {
+    content: segments.map((s) => s.text).join(" "),
+    segments,
+  };
 }
 
 // ---- SupadataProvider ----
@@ -174,7 +211,8 @@ export class SupadataProvider implements YouTubeProvider {
   ): Promise<TranscriptResult | null> {
     const params: Record<string, string> = {
       url: videoURL,
-      text: "true",
+      // Bewusst *nicht* text=true: das lieferte reinen Fließtext und warf die
+      // Segmentzeiten weg, die Supadata ohne den Schalter mitliefert.
       mode: "auto",
     };
     if (lang) params.lang = lang;
@@ -194,7 +232,7 @@ export class SupadataProvider implements YouTubeProvider {
     if (!data.content) return null;
 
     return {
-      content: data.content,
+      ...aufbereiten(data.content),
       language: data.lang || lang || "unknown",
       source: "native", // Supadata mode=auto liefert native oder ai-generiert
     };
@@ -212,7 +250,7 @@ export class SupadataProvider implements YouTubeProvider {
 
         if (data.status === "completed" && data.content) {
           return {
-            content: data.content,
+            ...aufbereiten(data.content),
             language: data.lang || "unknown",
             source: "ai_generated",
           };

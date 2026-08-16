@@ -9,7 +9,8 @@
 //   Weder noch → direkter Zugriff (nur lokal)
 
 import { createProvider, getConfig } from "./youtube/registry.ts";
-import type { YouTubeProvider } from "./youtube/types.ts";
+import type { YouTubeProvider, TranscriptSegment } from "./youtube/types.ts";
+import { formatTimestamp, groupSegments } from "./youtube/segments.ts";
 
 export interface YouTubeInfo {
   videoId: string;
@@ -24,6 +25,8 @@ export interface YouTubeInfo {
   transcript: string;
   transcriptLanguage: string;
   transcriptSource: string;
+  /** Leer, wenn der Provider keine Zeitmarken geliefert hat. */
+  segments: TranscriptSegment[];
 }
 
 // YouTube-URL Patterns (wie WeKnora)
@@ -128,8 +131,12 @@ export async function fetchYouTubeInfo(
     transcript: transcript?.content || "",
     transcriptLanguage: transcript?.language || "unknown",
     transcriptSource: transcript?.source || "unknown",
+    segments: transcript?.segments || [],
   };
 
+  console.log(
+    `[youtube] Zeitmarken: ${result.segments.length > 0 ? `✅ ${result.segments.length} Segmente` : "❌ keine (Provider liefert nur Fließtext)"}`,
+  );
   console.log(`[youtube] Dokument-Titel: "${result.title}"`);
   console.log(
     `[youtube] Transkript-Länge: ${result.transcript.length} Zeichen`,
@@ -144,9 +151,43 @@ export async function fetchYouTubeInfo(
 }
 
 /**
+ * Ein Textabschnitt des Dokuments und die Videostelle, aus der er stammt.
+ * Zeichenbereich, weil das Chunking (documents.splitIntoChunks) zeichenweise
+ * schneidet — nur so lässt sich einem Chunk hinterher ein Zeitfenster zuordnen.
+ */
+export interface ZeitAbschnitt {
+  char_start: number;
+  char_end: number;
+  start_ms: number;
+  end_ms: number | null;
+}
+
+export interface DokumentText {
+  content: string;
+  /** Leer, wenn das Transkript keine Zeitmarken hatte. */
+  timeline: ZeitAbschnitt[];
+}
+
+/** Blockgröße der Zeitmarken im Dokumenttext (siehe groupSegments). */
+const ZEITMARKEN_BLOCK_MS = 30_000;
+
+/**
  * Baut den Text für Chunking/Embedding aus den YouTube-Info-Daten.
+ *
+ * Mit Zeitmarken bekommt jeder Transkriptblock eine Zeile der Form
+ * `[12:34] …`. Das ist bewusst *im Text* und nicht nur in einer Nebentabelle:
+ * Chunks, Sprachmodell-Kontext und Wiki-Generierung laufen alle über diesen
+ * Text — eine Zeitmarke, die nur danebenliegt, käme in keinem Artikel an.
  */
 export function buildDocumentContent(info: YouTubeInfo): string {
+  return buildDocumentText(info).content;
+}
+
+/**
+ * Wie buildDocumentContent, liefert zusätzlich die Zeichen-zu-Zeit-Zuordnung.
+ * Getrennte Funktion, damit die vorhandenen Aufrufer unverändert bleiben.
+ */
+export function buildDocumentText(info: YouTubeInfo): DokumentText {
   const parts: string[] = [];
 
   parts.push(`# ${info.title}`);
@@ -160,14 +201,62 @@ export function buildDocumentContent(info: YouTubeInfo): string {
     parts.push(``);
   }
 
-  if (info.transcript) {
+  const timeline: ZeitAbschnitt[] = [];
+
+  if (info.segments && info.segments.length > 0) {
+    parts.push(`## Transkript\n`);
+    // Kopf des Transkripts, bis zu dem der Text feststeht — ab hier zählen die
+    // Zeichenpositionen der Blöcke.
+    let offset = parts.join("\n").length + 1;
+
+    const blöcke = groupSegments(info.segments, ZEITMARKEN_BLOCK_MS);
+    for (const b of blöcke) {
+      const zeile = `[${formatTimestamp(b.start_ms)}] ${b.text}`;
+      parts.push(zeile);
+      timeline.push({
+        char_start: offset,
+        char_end: offset + zeile.length,
+        start_ms: b.start_ms,
+        end_ms: b.end_ms,
+      });
+      // +1 für das "\n", mit dem parts später verbunden wird.
+      offset += zeile.length + 1;
+    }
+  } else if (info.transcript) {
+    // Kein Provider-Zeitraster → wie bisher reiner Fließtext.
     parts.push(`## Transkript\n`);
     parts.push(info.transcript);
   }
 
-  const result = parts.join("\n");
-  console.log(`[youtube] buildDocumentContent: ${result.length} Zeichen`);
-  return result;
+  const content = parts.join("\n");
+  console.log(
+    `[youtube] buildDocumentContent: ${content.length} Zeichen, ${timeline.length} Zeitblöcke`,
+  );
+  return { content, timeline };
+}
+
+/**
+ * Zeitfenster für einen Zeichenbereich des Dokuments.
+ *
+ * Ein Chunk deckt in der Regel mehrere Zeitblöcke ab; genommen wird der Beginn
+ * des ersten und das Ende des letzten überlappenden Blocks. Chunks, die nur den
+ * Kopfbereich (Titel, Kanal, Beschreibung) treffen, ergeben null — ihnen eine
+ * Zeit anzudichten wäre schlimmer als keine.
+ */
+export function zeitfensterFür(
+  timeline: ZeitAbschnitt[],
+  charStart: number,
+  charEnd: number,
+): { start_ms: number; end_ms: number | null } | null {
+  const treffer = timeline.filter(
+    (t) => t.char_start < charEnd && t.char_end > charStart,
+  );
+  if (treffer.length === 0) return null;
+
+  return {
+    start_ms: treffer[0].start_ms,
+    end_ms: treffer[treffer.length - 1].end_ms,
+  };
 }
 
 /**

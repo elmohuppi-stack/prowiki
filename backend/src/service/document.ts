@@ -6,6 +6,7 @@ import {
   wikiPageRevisions,
   activityLogs,
   documentTopics,
+  transcriptSegments,
 } from "../db/schema.ts";
 import { eq, desc, asc, and, sql, ilike, gte, lte, inArray } from "drizzle-orm";
 
@@ -194,6 +195,21 @@ export async function updateDocumentContent(id: string, content: string) {
   return doc || null;
 }
 
+/**
+ * Chunks eines Dokuments verwerfen — Vorstufe eines erneuten Chunkings, etwa
+ * wenn ein Transkript neu geholt wurde und jetzt Zeitmarken trägt.
+ *
+ * Die Wiki-Chunks (`wiki--<uuid>`) bleiben unberührt: sie hängen an Artikeln,
+ * nicht am Dokument.
+ */
+export async function deleteChunks(documentId: string) {
+  const geloescht = await db
+    .delete(chunks)
+    .where(eq(chunks.document_id, documentId))
+    .returning({ id: chunks.id });
+  return geloescht.length;
+}
+
 export async function deleteDocument(id: string) {
   await db.transaction(async (tx) => {
     const [doc] = await tx
@@ -279,7 +295,13 @@ export async function deleteDocument(id: string) {
 export async function saveChunks(
   documentId: string,
   wikiId: string,
-  chunkData: { content: string; chunk_index: number; token_count: number }[],
+  chunkData: {
+    content: string;
+    chunk_index: number;
+    token_count: number;
+    start_ms?: number | null;
+    end_ms?: number | null;
+  }[],
 ) {
   if (chunkData.length === 0) return [];
 
@@ -292,9 +314,63 @@ export async function saveChunks(
     content: c.content,
     chunk_index: c.chunk_index,
     token_count: c.token_count,
+    start_ms: c.start_ms ?? null,
+    end_ms: c.end_ms ?? null,
   }));
 
   return await db.insert(chunks).values(values).returning();
+}
+
+/**
+ * Transkriptsegmente eines Dokuments ersetzen.
+ *
+ * Erst löschen, dann einfügen: beim erneuten Holen eines Transkripts (etwa über
+ * den Wiederhol-Endpunkt) könnte ein anderer Actor eine andere Segmentzahl
+ * liefern, und ein reiner Upsert ließe die überzähligen Zeilen stehen.
+ */
+export async function replaceTranscriptSegments(
+  documentId: string,
+  wikiId: string,
+  segmente: {
+    start_ms: number;
+    end_ms: number | null;
+    text: string;
+    speaker?: string | null;
+  }[],
+) {
+  await db
+    .delete(transcriptSegments)
+    .where(eq(transcriptSegments.document_id, documentId));
+
+  if (segmente.length === 0) return 0;
+
+  // In Blöcken einfügen: ein einzelnes INSERT mit zehntausenden Zeilen
+  // überschreitet bei langen Videos das Parameterlimit von Postgres.
+  const BLOCK = 500;
+  for (let i = 0; i < segmente.length; i += BLOCK) {
+    await db.insert(transcriptSegments).values(
+      segmente.slice(i, i + BLOCK).map((s, j) => ({
+        document_id: documentId,
+        wiki_id: wikiId,
+        segment_index: i + j,
+        start_ms: s.start_ms,
+        end_ms: s.end_ms,
+        text: s.text,
+        speaker: s.speaker ?? null,
+      })),
+    );
+  }
+
+  return segmente.length;
+}
+
+/** Segmente eines Dokuments in Videoreihenfolge. */
+export async function listTranscriptSegments(documentId: string) {
+  return await db
+    .select()
+    .from(transcriptSegments)
+    .where(eq(transcriptSegments.document_id, documentId))
+    .orderBy(transcriptSegments.segment_index);
 }
 
 // Hilfsfunktion: Text in Chunks teilen
@@ -305,10 +381,14 @@ export function splitIntoChunks(
 ) {
   if (!text || text.length === 0) return [];
 
+  // char_start/char_end wandern mit: nur darüber lässt sich einem Chunk später
+  // das Zeitfenster im Video zuordnen (siehe youtube.ts, zeitfensterFür).
   const chunks: {
     content: string;
     chunk_index: number;
     token_count: number;
+    char_start: number;
+    char_end: number;
   }[] = [];
   let start = 0;
   let index = 0;
@@ -326,6 +406,8 @@ export function splitIntoChunks(
       content,
       chunk_index: index,
       token_count: content.split(/\s+/).length,
+      char_start: start,
+      char_end: end,
     });
 
     index++;

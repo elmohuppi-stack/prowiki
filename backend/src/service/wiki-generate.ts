@@ -29,6 +29,7 @@ import {
   normalizeProtocolFlags,
   pagePromptFor,
   summaryPromptFor,
+  zeitmarkenRegel,
 } from "./wiki-prompts.ts";
 import * as wikiService from "./wiki.ts";
 import * as topicService from "./topic.ts";
@@ -116,6 +117,32 @@ function normalizeKey(text: string): string {
     .replace(/^(entity|concept)\//, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+/**
+ * Zeilenanfang der Form `[12:34] ` — so schreibt buildDocumentText die
+ * Zeitmarken in den Dokumenttext.
+ */
+const ZEITMARKE_IM_TEXT = /^\[\d{1,3}:\d{2}(?::\d{2})?\]\s/m;
+
+/**
+ * Video-URL für die Zeitmarken-Zitate — oder null, wenn dieses Dokument keine
+ * Zeitmarken trägt.
+ *
+ * Geprüft wird der Text selbst statt nur des Dokumenttyps: ein vor der
+ * Umstellung importiertes Video ist weiterhin `type = "youtube"`, hat aber
+ * keine Marken. Ohne diese Prüfung bekäme das Modell die Anweisung, auf
+ * Zeitmarken zu verweisen, die es nirgends findet — und würde sie erfinden.
+ */
+function videoUrlFürZeitmarken(doc: {
+  type: string;
+  source_url: string | null;
+  source: string;
+  content: string | null;
+}): string | null {
+  if (doc.type !== "youtube") return null;
+  if (!doc.content || !ZEITMARKE_IM_TEXT.test(doc.content)) return null;
+  return doc.source_url || doc.source || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -332,6 +359,12 @@ export async function generateWikiArticles(
     `[wiki-gen] 📝 Schritt 2: Generiere ${chapters.length} Kapitel-Artikel...`,
   );
 
+  // Einmal für den ganzen Lauf: entweder trägt das Dokument Zeitmarken oder nicht.
+  const zeitmarken = zeitmarkenRegel(videoUrlFürZeitmarken(doc));
+  if (zeitmarken) {
+    console.log(`[wiki-gen] ⏱️ Zeitmarken vorhanden – Artikel dürfen belegen`);
+  }
+
   const baseSlug = slugify(`summary-${doc.id}`);
   const chapterSlugs: string[] = [];
   const chapterLinks: string[] = [];
@@ -344,6 +377,7 @@ export async function generateWikiArticles(
       provider,
       summaryPromptFor(docKind)
         .replace("{{content}}", chapter.text)
+        .replace(/\{\{timestampRule\}\}/g, zeitmarken)
         .replace(/\{\{language\}\}/g, language)
         .replace(/\{\{sessionLabel\}\}/g, doc.title)
         .replace("{{extractedSlugs}}", extractedSlugsText || "Keine")
@@ -614,6 +648,7 @@ export async function generateWikiArticles(
       availableSlugs: existingSlugs,
       docKind,
       sessionLabel: doc.title,
+      zeitmarkenRegel: zeitmarken,
     });
     const raw = await callLLM(provider, pagePrompt);
     if (!raw) continue;
@@ -981,6 +1016,8 @@ function buildPagePrompt(opts: {
   availableSlugs: string[];
   docKind?: "meeting_protocol" | "default";
   sessionLabel?: string;
+  /** Leer, wenn das Quelldokument keine Zeitmarken trägt. */
+  zeitmarkenRegel?: string;
 }): string {
   const {
     item,
@@ -990,6 +1027,7 @@ function buildPagePrompt(opts: {
     availableSlugs,
     docKind = "default",
     sessionLabel = "",
+    zeitmarkenRegel = "",
   } = opts;
   const pageType = item.slug.startsWith("entity/") ? "Entität" : "Konzept";
   const validLinks = [...new Set(availableSlugs)]
@@ -998,6 +1036,7 @@ function buildPagePrompt(opts: {
     .join("\n");
 
   return pagePromptFor(docKind)
+    .replace(/\{\{timestampRule\}\}/g, zeitmarkenRegel)
     .replace(/\{\{pageSlug\}\}/g, item.slug)
     .replace(/\{\{pageTitle\}\}/g, item.name)
     .replace(/\{\{pageType\}\}/g, pageType)

@@ -1,11 +1,31 @@
 // YouTube Transcript Provider – Types & Interfaces
 // Inspiriert von WeKnora's Go-Implementierung
 
+/**
+ * Ein Transkriptabschnitt mit Zeitmarke. Die Provider liefern das ohnehin —
+ * knora hat es weggeworfen, weshalb kein Artikel auf eine Stelle im Video
+ * verweisen konnte (siehe schema/content.ts, `transcript_segments`).
+ */
+export interface TranscriptSegment {
+  /** Startzeit im Video in Millisekunden. */
+  start_ms: number;
+  /** Endzeit, falls der Provider sie kennt oder aus der Dauer ableitbar ist. */
+  end_ms: number | null;
+  text: string;
+  /** Nur belegt, wenn ein Provider Sprechertrennung liefert. */
+  speaker?: string | null;
+}
+
 /** Roh-Ergebnis eines Transcript-Providers */
 export interface TranscriptResult {
   content: string;
   language: string;
   source: "native" | "auto_generated" | "ai_generated";
+  /**
+   * Leer, wenn der Provider nur Fließtext geliefert hat. Der Import muss
+   * deshalb weiter ohne Zeitmarken funktionieren.
+   */
+  segments?: TranscriptSegment[];
 }
 
 /** Roh-Ergebnis eines Metadata-Providers */

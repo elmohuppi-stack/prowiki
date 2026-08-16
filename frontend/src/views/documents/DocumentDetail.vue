@@ -44,7 +44,8 @@
         </div>
         <div class="meta-video" v-if="youtubeId">
           <iframe
-            :src="'https://www.youtube-nocookie.com/embed/' + youtubeId"
+            :key="videoStartSec"
+            :src="embedUrl"
             title="YouTube"
             frameborder="0"
             allow="
@@ -103,7 +104,52 @@
         </div>
       </div>
 
-      <div class="transcript-box" v-if="doc.content">
+      <!-- Transkript. Mit Zeitmarken als klickbare Liste, sonst wie bisher
+           als Rohtext. -->
+      <div class="transcript-head">
+        <h4>
+          Transkript
+          <span v-if="segments.length" class="seg-count"
+            >· {{ segments.length }} Zeitmarken</span
+          >
+        </h4>
+        <div class="transcript-actions" v-if="doc.type === 'youtube'">
+          <button
+            v-if="segments.length"
+            class="btn-secondary btn-sm"
+            @click="showRaw = !showRaw"
+          >
+            {{ showRaw ? "🕒 Mit Zeitmarken" : "📄 Rohtext" }}
+          </button>
+          <button
+            class="btn-secondary btn-sm"
+            @click="refreshTranscript"
+            :disabled="refreshing"
+            :title="
+              segments.length
+                ? 'Transkript erneut beim Anbieter holen (kostet Guthaben)'
+                : 'Transkript mit Zeitmarken nachträglich holen (kostet Guthaben)'
+            "
+          >
+            {{ refreshing ? "⏳ Hole Transkript..." : "🔄 Transkript neu holen" }}
+          </button>
+        </div>
+      </div>
+      <p v-if="refreshResult" class="gen-feedback">{{ refreshResult }}</p>
+
+      <div class="transcript-box" v-if="segments.length && !showRaw">
+        <div v-for="s in groupedSegments" :key="s.start_ms" class="seg-row">
+          <button
+            class="seg-time"
+            @click="seekTo(s.start_ms)"
+            :title="'Video an dieser Stelle abspielen'"
+          >
+            {{ formatTimestamp(s.start_ms) }}
+          </button>
+          <span class="seg-text">{{ s.text }}</span>
+        </div>
+      </div>
+      <div class="transcript-box" v-else-if="doc.content">
         <pre>{{ doc.content }}</pre>
       </div>
       <p v-else class="empty">(Kein Inhalt)</p>
@@ -159,6 +205,89 @@ const wikiPages = ref<any[]>([]);
 const generating = ref(false);
 const genResult = ref("");
 const showFullDesc = ref(false);
+
+// --- Transkript mit Zeitmarken ---
+const segments = ref<any[]>([]);
+const showRaw = ref(false);
+const refreshing = ref(false);
+const refreshResult = ref("");
+/** Sekunde, an der der eingebettete Player starten soll (0 = Anfang). */
+const videoStartSec = ref(0);
+
+const embedUrl = computed(() => {
+  const basis = `https://www.youtube-nocookie.com/embed/${youtubeId.value}`;
+  // Beim ersten Aufbau ohne autoplay – ein Video, das beim Öffnen der Seite
+  // von selbst losspielt, ist zumutbar nur nach einem Klick.
+  return videoStartSec.value > 0
+    ? `${basis}?start=${videoStartSec.value}&autoplay=1`
+    : basis;
+});
+
+/**
+ * Springt im eingebetteten Player an die Stelle.
+ *
+ * Über den :key am iframe: das erzwingt einen Neuaufbau mit dem neuen
+ * start-Parameter. Die YouTube-IFrame-API wäre der elegantere Weg, verlangt
+ * aber ein Skript von einer fremden Domain — für einen Sprung im eigenen
+ * Transkript kein guter Tausch.
+ */
+function seekTo(ms: number) {
+  videoStartSec.value = Math.max(0, Math.floor(ms / 1000));
+}
+
+/** Spiegelt formatTimestamp aus dem Backend (service/youtube/segments.ts). */
+function formatTimestamp(ms: number) {
+  const gesamt = Math.max(0, Math.floor(ms / 1000));
+  const s = gesamt % 60;
+  const m = Math.floor(gesamt / 60) % 60;
+  const h = Math.floor(gesamt / 3600);
+  const zwei = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${zwei(m)}:${zwei(s)}` : `${m}:${zwei(s)}`;
+}
+
+/**
+ * Rohsegmente sind zwei bis fünf Sekunden lang — als Liste wäre das eine
+ * unlesbare Zeitmarkenkolonne. Zusammengefasst auf rund 30 Sekunden, wie im
+ * Backend beim Dokumenttext (groupSegments).
+ */
+const groupedSegments = computed(() => {
+  const ZIEL_MS = 30_000;
+  const blöcke: { start_ms: number; text: string }[] = [];
+  for (const s of segments.value) {
+    const letzter = blöcke[blöcke.length - 1];
+    if (!letzter || s.start_ms - letzter.start_ms >= ZIEL_MS) {
+      blöcke.push({ start_ms: s.start_ms, text: s.text });
+    } else {
+      letzter.text += " " + s.text;
+    }
+  }
+  return blöcke;
+});
+
+async function loadSegments() {
+  try {
+    const r = await axios.get(`/api/v1/documents/${documentId}/segments`);
+    segments.value = r.data.segments || [];
+  } catch {
+    // Ältere Dokumente haben keine – kein Fehlerfall.
+  }
+}
+
+async function refreshTranscript() {
+  refreshing.value = true;
+  refreshResult.value = "";
+  try {
+    const r = await axios.post(
+      `/api/v1/documents/${documentId}/refresh-transcript`,
+    );
+    refreshResult.value = `✅ ${r.data.segments} Zeitmarken geholt. ${r.data.hinweis}`;
+    await Promise.all([loadDoc(), loadSegments()]);
+  } catch (e: any) {
+    refreshResult.value = "❌ " + (e.response?.data?.error || e.message);
+  } finally {
+    refreshing.value = false;
+  }
+}
 
 const youtubeId = computed(() => {
   if (!doc.value?.source_url) return null;
@@ -233,6 +362,7 @@ onMounted(async () => {
     loadWikiPages(),
     loadTopics(),
     loadDocTopics(),
+    loadSegments(),
   ]);
 });
 
@@ -633,6 +763,60 @@ function formatDate(dateStr: string) {
 }
 
 /* Transcript */
+.transcript-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 1.25rem 0 0.5rem;
+  flex-wrap: wrap;
+}
+.transcript-head h4 {
+  font-size: 0.95rem;
+}
+.seg-count {
+  font-weight: 400;
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+}
+.transcript-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.btn-sm {
+  padding: 0.35rem 0.7rem;
+  font-size: 0.8rem;
+}
+.seg-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.seg-row:last-child {
+  border-bottom: none;
+}
+/* Feste Breite, damit der Text aller Zeilen an derselben Kante beginnt —
+   sonst springt er zwischen "9:05" und "1:09:05" hin und her. */
+.seg-time {
+  flex: 0 0 4.5rem;
+  text-align: right;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  color: var(--color-primary);
+}
+.seg-time:hover {
+  text-decoration: underline;
+}
+.seg-text {
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
 .transcript-box {
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);

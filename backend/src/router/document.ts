@@ -12,7 +12,10 @@ import {
   extractVideoId,
   fetchYouTubeInfo,
   buildDocumentContent,
+  buildDocumentText,
   buildDocumentMetadata,
+  zeitfensterFür,
+  type ZeitAbschnitt,
 } from "../service/youtube.ts";
 import type { DocumentSort } from "../service/document.ts";
 import { logActivity, updateLog } from "../service/activity-log.ts";
@@ -332,8 +335,11 @@ documentRouter.post(
       `[doc] ✅ Transkript: ${info.transcript.length} Zeichen (${info.transcriptLanguage})`,
     );
 
-    const content = buildDocumentContent(info);
+    const { content, timeline } = buildDocumentText(info);
     console.log(`[doc] Dokument-Content: ${content.length} Zeichen`);
+    console.log(
+      `[doc] Zeitmarken: ${info.segments.length} Segmente → ${timeline.length} Blöcke im Text`,
+    );
 
     const meta = buildDocumentMetadata(info);
     const doc = await documentService.createDocument({
@@ -352,13 +358,34 @@ documentRouter.post(
     });
     console.log(`[doc] ✅ Dokument erstellt: ${doc.id}`);
 
+    // Segmente speichern, bevor gechunkt wird: die Zeitmarken sind das teuer
+    // beschaffte Gut (ein erneuter Abruf kostet Apify-Guthaben), das Chunking
+    // ist daraus jederzeit wiederholbar.
+    if (info.segments.length > 0) {
+      try {
+        await documentService.replaceTranscriptSegments(
+          doc.id,
+          wiki_id,
+          info.segments,
+        );
+        console.log(`[doc] ✅ ${info.segments.length} Segmente gespeichert`);
+      } catch (e: any) {
+        console.warn(`[doc] ⚠️ Segmente nicht gespeichert:`, e.message);
+      }
+    }
+
     await updateLog(logId, {
       status: "completed",
-      message: `„${info.title}” importiert (${info.transcript.length} Zeichen)`,
+      message: `„${info.title}” importiert (${info.transcript.length} Zeichen${
+        info.segments.length > 0
+          ? `, ${info.segments.length} Zeitmarken`
+          : ", ohne Zeitmarken"
+      })`,
       details: {
         title: info.title,
         channel: info.channelName,
         transcript_len: info.transcript.length,
+        segments: info.segments.length,
         doc_id: doc.id,
       },
       duration_ms: Date.now() - t0,
@@ -367,7 +394,7 @@ documentRouter.post(
     // Chunking starten (async – entkoppelt vom Request-Kontext)
     console.log(`[doc] Starte Chunking für ${doc.id}...`);
     setTimeout(() => {
-      scheduleChunking(doc.id, wiki_id, content).catch((e: any) =>
+      scheduleChunking(doc.id, wiki_id, content, timeline).catch((e: any) =>
         console.error(`[doc] Chunking fehlgeschlagen:`, e.message),
       );
     }, 100);
@@ -418,6 +445,109 @@ documentRouter.post("/:id/refresh-metadata", async (c) => {
     source_metadata: meta.source_metadata,
   });
   return c.json({ document: updated });
+});
+
+/**
+ * Transkript eines einzelnen Videos neu holen — der Weg, ein vor der
+ * Zeitmarken-Umstellung importiertes Video nachzurüsten.
+ *
+ * Bewusst je Video von Hand auszulösen und nicht als Sammellauf: jeder Aufruf
+ * kostet Apify-Guthaben. Aus demselben Grund bleibt das Dokument unverändert,
+ * wenn der Abruf keine Zeitmarken liefert — ein Rückfall auf Fließtext würde
+ * bezahlte Daten gegen schlechtere eintauschen.
+ *
+ * Die Wiki-Artikel werden *nicht* neu erzeugt; das ist ein eigener, teurer
+ * Schritt und bleibt eine bewusste Entscheidung des Nutzers.
+ */
+documentRouter.post("/:id/refresh-transcript", async (c) => {
+  const id = c.req.param("id");
+  await requireDocumentCapability(c.get("principal"), id, "wiki.write");
+  const doc = await documentService.getDocument(id);
+  if (!doc) return c.json({ error: "Document not found" }, 404);
+  if (doc.type !== "youtube") {
+    return c.json(
+      { error: "Ein Transkript gibt es nur für YouTube-Dokumente" },
+      400,
+    );
+  }
+
+  const videoId = extractVideoId(doc.source_url || doc.source);
+  if (!videoId) {
+    return c.json({ error: "Keine Video-ID im Dokument gefunden" }, 400);
+  }
+
+  const t0 = Date.now();
+  const logId = await logActivity({
+    action: "transcript_refresh",
+    status: "started",
+    message: `Hole Transkript neu: „${doc.title}”`,
+    details: { videoId },
+    wiki_id: doc.wiki_id,
+    document_id: id,
+    user_id: c.get("principal").userId!,
+  });
+
+  const info = await fetchYouTubeInfo(videoId);
+  if (!info) {
+    await updateLog(logId, {
+      status: "failed",
+      message: "Provider lieferte keine Daten",
+      duration_ms: Date.now() - t0,
+    });
+    return c.json({ error: "Video konnte nicht abgerufen werden" }, 502);
+  }
+
+  if (info.segments.length === 0) {
+    await updateLog(logId, {
+      status: "failed",
+      message: "Abruf ohne Zeitmarken – Dokument unverändert",
+      duration_ms: Date.now() - t0,
+    });
+    return c.json(
+      {
+        error:
+          "Der Provider hat für dieses Video keine Zeitmarken geliefert. Das Dokument wurde nicht verändert.",
+      },
+      422,
+    );
+  }
+
+  await documentService.replaceTranscriptSegments(
+    id,
+    doc.wiki_id,
+    info.segments,
+  );
+
+  // Dokumenttext neu aufbauen, damit die Zeitmarken auch im Text stehen —
+  // sonst kämen sie weder in die Chunks noch in eine spätere Generierung.
+  const { content, timeline } = buildDocumentText(info);
+  await documentService.updateDocumentContent(id, content);
+  await documentService.deleteChunks(id);
+  await scheduleChunking(id, doc.wiki_id, content, timeline);
+
+  await updateLog(logId, {
+    status: "completed",
+    message: `Transkript neu geholt: ${info.segments.length} Zeitmarken`,
+    details: { segments: info.segments.length, videoId },
+    duration_ms: Date.now() - t0,
+  });
+
+  return c.json({
+    success: true,
+    segments: info.segments.length,
+    transcript_language: info.transcriptLanguage,
+    transcript_source: info.transcriptSource,
+    hinweis:
+      "Chunks und Einbettungen wurden erneuert. Wiki-Artikel bleiben unverändert – sie müssen bei Bedarf getrennt neu erzeugt werden.",
+  });
+});
+
+/** Transkriptsegmente eines Dokuments — Grundlage der Transkriptansicht. */
+documentRouter.get("/:id/segments", async (c) => {
+  const id = c.req.param("id");
+  await requireDocumentCapability(c.get("principal"), id, "wiki.read");
+  const segments = await documentService.listTranscriptSegments(id);
+  return c.json({ segments });
 });
 
 // Vorschau: was würde ein Verschieben bewirken? Verlangt Schreibrecht in Quelle
@@ -472,6 +602,8 @@ async function scheduleChunking(
   docId: string,
   wikiId: string,
   text: string,
+  /** Nur bei YouTube-Importen mit Zeitmarken belegt. */
+  timeline: ZeitAbschnitt[] = [],
 ) {
   try {
     await documentService.updateDocumentStatus(docId, "processing");
@@ -504,8 +636,26 @@ async function scheduleChunking(
       ws?.chunk_size ?? 512,
       ws?.chunk_overlap ?? 50,
     );
-    if (chunkList.length > 0) {
-      await documentService.saveChunks(docId, wikiId, chunkList);
+
+    // Jedem Chunk das Zeitfenster mitgeben, aus dem sein Text stammt. Damit
+    // kann eine Chat-Antwort später nicht nur das Video, sondern die Stelle
+    // belegen (chunks.start_ms, schema/content.ts).
+    const mitZeit = chunkList.map((c) => {
+      const fenster =
+        timeline.length > 0
+          ? zeitfensterFür(timeline, c.char_start, c.char_end)
+          : null;
+      return { ...c, start_ms: fenster?.start_ms ?? null, end_ms: fenster?.end_ms ?? null };
+    });
+
+    if (mitZeit.length > 0) {
+      await documentService.saveChunks(docId, wikiId, mitZeit);
+      const verzeitet = mitZeit.filter((c) => c.start_ms !== null).length;
+      if (timeline.length > 0) {
+        console.log(
+          `[doc] ${verzeitet}/${mitZeit.length} Chunks mit Zeitfenster`,
+        );
+      }
     }
 
     await documentService.updateDocumentStatus(

@@ -5,6 +5,33 @@
  */
 
 // ---------------------------------------------------------------------------
+// Zeitmarken-Regel
+//
+// Seit dem Transkript-Umbau steht im Dokumenttext vor jedem Transkriptblock
+// eine Marke der Form `[12:34]`. Ohne ausdrückliche Anweisung behandelt ein
+// Sprachmodell die als Störrauschen und lässt sie weg — die teuer beschaffte
+// Information käme in keinem Artikel an. Deshalb diese Regel, und deshalb mit
+// fertiger Beispiel-URL: eine selbst zusammengesetzte YouTube-Adresse ist die
+// wahrscheinlichste Fehlerquelle.
+// ---------------------------------------------------------------------------
+export function zeitmarkenRegel(videoUrl: string | null): string {
+  if (!videoUrl) return "";
+
+  // Ein bereits vorhandenes ?t= würde sich sonst verdoppeln.
+  const basis = videoUrl.split(/[?&]t=/)[0];
+  const trenner = basis.includes("?") ? "&" : "?";
+
+  return `
+### Zeitmarken (WICHTIG):
+Der Quelltext enthält Marken der Form \`[12:34]\` (Stunde:Minute:Sekunde bzw. Minute:Sekunde) am Beginn jedes Transkriptabschnitts. Sie geben die Stelle im Video an.
+- Setze hinter jede Aussage, jedes Zitat und jede Zahl die Stelle, aus der sie stammt, als Markdown-Link: \`([12:34](${basis}${trenner}t=754))\`.
+- Der Wert hinter \`t=\` sind **Sekunden als ganze Zahl**: rechne die Marke um (12:34 → 12·60+34 = 754; 1:02:34 → 3754).
+- Verwende ausschließlich Marken, die im Quelltext tatsächlich vorkommen. Rechne keine Zeiten hoch und schätze keine.
+- Die Marken selbst gehören NICHT in den Fließtext — nur als Link am Ende der jeweiligen Aussage.
+`;
+}
+
+// ---------------------------------------------------------------------------
 // Pass 0: Entities + Concepts aus einem Dokument extrahieren
 // ---------------------------------------------------------------------------
 export const WIKI_CANDIDATE_SLUG_PROMPT = `Du bist ein Wissensextraktionssystem. Analysiere das folgende Dokument und extrahiere alle wichtigen Entitäten UND Schlüsselkonzepte als JSON-Liste von Kandidaten. Ein späterer Durchlauf wird später konkrete Quell-Chunks zu jedem Eintrag zuordnen, daher sind hier keine erschöpfenden Fakten nötig.
@@ -107,6 +134,7 @@ export const WIKI_SUMMARY_PROMPT = `Du bist ein Wiki-Redakteur. Transformiere de
 7. **Keine Kürzung**: Kürze, fasse zusammen oder lasse NICHTS aus. Gib ALLE Argumente, Fakten, Details, Zitate und Daten aus dem Originaldokument wieder. Ein 4-stündiges Video-Transkript sollte einen Artikel in der Länge des Transkripts ergeben.
 8. **Leerer-Content-Regel**: Falls der <content>-Block oben leer ist oder keine substanziellen Informationen enthält, gib exakt aus: "SUMMARY: Aus diesem Dokument konnte kein Text extrahiert werden." gefolgt von einem kurzen Hinweis. Erfinde KEIN Thema.
 </instructions>
+{{timestampRule}}
 
 Gib zuerst die SUMMARY-Zeile aus, dann den Markdown-Inhalt. Keine anderen Vorbemerkungen.`;
 
@@ -269,6 +297,7 @@ export const WIKI_PAGE_MODIFY_PROMPT = `Du bist ein Wiki-Redakteur, der eine Wik
 - **Nachverfolgbarkeit**: Versieh jede Tatsachenbehauptung, Zahl, Datum oder Beziehung mit dem passenden Inline-Zitat (z.B. [c003]). Bewahre bestehende [cNNN]-Zitate.
 - **Struktur**: Beginne mit "# {{pageTitle}}" gefolgt von einem Einleitungsabsatz. Gliedere längere Seiten mit ## Abschnitten (z.B. Hintergrund, Ursachen, Auswirkungen, Ausblick). Nutze Bullet-Listen für Aufzählungen von Fakten.
 - **Keine Halluzination**: Erfinde nichts, was nicht in den Quell-Chunks steht.
+{{timestampRule}}
 
 <page_metadata>
   <slug>{{pageSlug}}</slug>
