@@ -163,13 +163,45 @@
       </p>
 
       <form class="pw-form" @submit.prevent="askChangePassword">
+        <!-- Auge je Feld, gleiches Muster wie auf der Login-Seite. Ein
+             gemeinsamer Schalter wäre knapper, macht aber genau die Prüfung
+             unmöglich, für die man ihn braucht: sehen, ob sich in *einem* der
+             beiden neuen Felder ein Tippfehler versteckt. -->
         <div class="field">
           <label>Aktuelles Passwort</label>
-          <input v-model="pw.current" type="password" autocomplete="current-password" />
+          <div class="password-wrapper">
+            <input
+              v-model="pw.current"
+              :type="shown.current ? 'text' : 'password'"
+              autocomplete="current-password"
+            />
+            <button
+              type="button"
+              class="toggle-pw"
+              @click="shown.current = !shown.current"
+              :title="shown.current ? 'Verbergen' : 'Anzeigen'"
+            >
+              <i :class="shown.current ? 'pi pi-eye-slash' : 'pi pi-eye'"></i>
+            </button>
+          </div>
         </div>
         <div class="field">
           <label>Neues Passwort</label>
-          <input v-model="pw.next" type="password" autocomplete="new-password" />
+          <div class="password-wrapper">
+            <input
+              v-model="pw.next"
+              :type="shown.next ? 'text' : 'password'"
+              autocomplete="new-password"
+            />
+            <button
+              type="button"
+              class="toggle-pw"
+              @click="shown.next = !shown.next"
+              :title="shown.next ? 'Verbergen' : 'Anzeigen'"
+            >
+              <i :class="shown.next ? 'pi pi-eye-slash' : 'pi pi-eye'"></i>
+            </button>
+          </div>
           <!-- Dieselbe Untergrenze wie im Backend (minPasswordLength: 12).
                Steht sie nur dort, sieht der Nutzer erst nach dem Absenden,
                dass sein Passwort zu kurz war. -->
@@ -177,7 +209,21 @@
         </div>
         <div class="field">
           <label>Neues Passwort wiederholen</label>
-          <input v-model="pw.repeat" type="password" autocomplete="new-password" />
+          <div class="password-wrapper">
+            <input
+              v-model="pw.repeat"
+              :type="shown.repeat ? 'text' : 'password'"
+              autocomplete="new-password"
+            />
+            <button
+              type="button"
+              class="toggle-pw"
+              @click="shown.repeat = !shown.repeat"
+              :title="shown.repeat ? 'Verbergen' : 'Anzeigen'"
+            >
+              <i :class="shown.repeat ? 'pi pi-eye-slash' : 'pi pi-eye'"></i>
+            </button>
+          </div>
         </div>
 
         <p v-if="pwError" class="error">{{ pwError }}</p>
@@ -286,6 +332,7 @@ const sortedMembers = computed(() =>
 );
 
 const pw = ref({ current: "", next: "", repeat: "" });
+const shown = ref({ current: false, next: false, repeat: false });
 const pwError = ref("");
 const pwDone = ref(false);
 const pwBusy = ref(false);
@@ -344,6 +391,9 @@ async function askChangePassword() {
   }
 
   pw.value = { current: "", next: "", repeat: "" };
+  // Sichtbarkeit mit zurücksetzen: ein aufgedecktes Feld bliebe sonst offen
+  // stehen und das nächste eingetippte Passwort wäre von Anfang an lesbar.
+  shown.value = { current: false, next: false, repeat: false };
   pwDone.value = true;
 }
 
@@ -623,6 +673,28 @@ async function removeMember(m: any) {
 
 .pw-form {
   max-width: 24rem;
+}
+.password-wrapper {
+  position: relative;
+}
+.password-wrapper input {
+  padding-right: 2.5rem;
+}
+.toggle-pw {
+  position: absolute;
+  right: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: 0.25rem;
+  display: flex;
+  align-items: center;
+}
+.toggle-pw:hover {
+  color: var(--color-text);
 }
 .field-hint {
   font-size: 0.75rem;
