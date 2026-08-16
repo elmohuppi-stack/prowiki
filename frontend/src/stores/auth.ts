@@ -12,6 +12,7 @@
  */
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
+import axios from "axios";
 import { authClient } from "../lib/auth-client";
 import { capabilitiesOf, isRoleName, type Capability } from "../lib/permissions";
 
@@ -66,13 +67,16 @@ export const useAuthStore = defineStore("auth", () => {
         return;
       }
 
-      const { data: orgs } = await authClient.organization.list();
-      organizations.value = (orgs ?? []).map((o: any) => ({
+      // Nicht `authClient.organization.list()`: dessen Antwort enthält die
+      // Organisation ohne die Mitgliedsrolle. Ohne Rolle fiel der Store hier
+      // stillschweigend auf `viewer` zurück — mit der Folge, dass selbst der
+      // Inhaber keinen einzigen verwaltenden Knopf zu sehen bekam.
+      const { data: orgData } = await axios.get("/api/v1/orgs");
+      organizations.value = (orgData.organizations ?? []).map((o: any) => ({
         id: o.id,
         name: o.name,
         slug: o.slug,
-        // Better Auth liefert die Rolle je nach Aufruf unterschiedlich benannt.
-        role: o.role ?? o.member?.role ?? "viewer",
+        role: o.role,
       }));
 
       // Gemerkte Organisation kann gelöscht worden oder die Mitgliedschaft

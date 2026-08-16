@@ -26,6 +26,17 @@
           <i class="pi pi-folder"></i>
           <span>Wikis</span>
         </a>
+        <!-- In knora hing dieser Punkt an `auth.isAdmin` — einer globalen
+             Rolle, die es nicht mehr gibt. Jetzt entscheidet die Capability
+             in der aktiven Organisation. -->
+        <router-link
+          v-if="auth.can('settings.manage')"
+          to="/settings"
+          class="nav-item"
+        >
+          <i class="pi pi-cog"></i>
+          <span>Einstellungen</span>
+        </router-link>
       </nav>
       <div class="sidebar-footer">
         <button
@@ -65,6 +76,14 @@
         <i class="pi pi-folder"></i>
         <span>Wikis</span>
       </a>
+      <router-link
+        v-if="auth.can('settings.manage')"
+        to="/settings"
+        class="mobile-nav-item"
+      >
+        <i class="pi pi-cog"></i>
+        <span>Einstellungen</span>
+      </router-link>
       <button class="mobile-nav-item" @click="toggleTheme">
         <i :class="isDark ? 'pi pi-sun' : 'pi pi-moon'"></i>
         <span>{{ isDark ? "Hell" : "Dunkel" }}</span>

@@ -89,6 +89,16 @@ const router = createRouter({
       redirect: (to) =>
         `/wikis/${to.params.wikiId}/documents/${to.params.documentId}`,
     },
+    {
+      // Einstellungen der *aktiven Organisation*. In knora lag hier
+      // `/settings` als globale Admin-Seite hinter `requiresAdmin` — die
+      // globale Rolle gibt es nicht mehr, geprüft wird `settings.manage`
+      // in der Organisation (und im Backend erneut, siehe model.ts).
+      path: "/settings",
+      name: "Settings",
+      component: () => import("../views/settings/OrgSettings.vue"),
+      meta: { requiresAuth: true },
+    },
   ],
 });
 

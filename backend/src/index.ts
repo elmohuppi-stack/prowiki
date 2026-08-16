@@ -6,6 +6,7 @@ import { auth, trustedOrigins } from "./auth/index.ts";
 import { sessionMiddleware } from "./middleware/auth.ts";
 import { wikisRouter } from "./router/wikis.ts";
 import { userRouter } from "./router/user.ts";
+import { orgRouter } from "./router/org.ts";
 import { modelRouter } from "./router/model.ts";
 import { documentRouter } from "./router/document.ts";
 import { searchRouter } from "./router/search.ts";
@@ -71,6 +72,7 @@ app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 app.use("/api/v1/*", sessionMiddleware);
 
 app.route("/api/v1/wikis", wikisRouter);
+app.route("/api/v1/orgs", orgRouter);
 app.route("/api/v1/orgs", userRouter);
 app.route("/api/v1/orgs", modelRouter);
 app.route("/api/v1/documents", documentRouter);
