@@ -232,7 +232,9 @@ export async function generateWikiArticles(
   // Dokument in Kapitel (~CHAPTER_CHARS) zerlegen, damit das GANZE Dokument
   // verarbeitet wird statt bei 32k Zeichen abgeschnitten. Kurze Dokumente ergeben
   // genau ein Kapitel = bisheriges Verhalten.
-  const chapters = splitIntoChapters(doc.content, CHAPTER_CHARS);
+  const chapters = verwertbareKapitel(
+    splitIntoChapters(doc.content, CHAPTER_CHARS),
+  );
   const multiChapter = chapters.length > 1;
   console.log(
     `[wiki-gen] 📖 Dokument in ${chapters.length} Kapitel zerlegt (~${CHAPTER_CHARS} Zeichen/Kapitel)`,
@@ -520,6 +522,44 @@ export async function generateWikiArticles(
     console.log(
       `[wiki-gen] 🚩 Auffälligkeiten: ${protocolFlags.flags.join(", ") || "keine"}`,
     );
+  }
+
+  /**
+   * Kapitelseiten aus einem früheren Lauf abräumen, die es jetzt nicht mehr
+   * gibt.
+   *
+   * Die Slugs sind durchnummeriert (`…-k1`, `-k2`, …). Erzeugt ein zweiter
+   * Lauf weniger Kapitel als der erste — etwa weil ein leeres Kapitel nicht
+   * mehr entsteht oder das Transkript neu geholt wurde — bliebe das letzte
+   * sonst als Waise in der Navigation stehen, mit Inhalt aus dem alten Stand.
+   *
+   * Von Hand bearbeitete Seiten bleiben: dort steckt Arbeit drin, die nicht
+   * still verschwinden darf. Sie werden gemeldet statt gelöscht.
+   */
+  if (multiChapter || chapterSlugs.length > 0) {
+    const alle = await db
+      .select({ slug: wikiPages.slug, manuell: wikiPages.manually_edited })
+      .from(wikiPages)
+      .where(
+        and(
+          eq(wikiPages.wiki_id, wikiId),
+          eq(wikiPages.source_document_id, docId),
+          eq(wikiPages.page_type, "summary"),
+        ),
+      );
+
+    const aktuell = new Set(chapterSlugs);
+    for (const p of alle) {
+      if (aktuell.has(p.slug)) continue;
+      if (p.manuell) {
+        console.log(
+          `[wiki-gen] ⚠️ Verwaistes Kapitel "${p.slug}" ist handbearbeitet – bleibt stehen`,
+        );
+        continue;
+      }
+      await wikiService.deletePage(wikiId, p.slug);
+      console.log(`[wiki-gen] 🗑️ Verwaistes Kapitel entfernt: ${p.slug}`);
+    }
   }
 
   // =========================================================================
@@ -900,18 +940,64 @@ function splitIntoChapters(content: string, targetChars: number): Chapter[] {
 }
 
 /** Packt Text an Absatzgrenzen (\n\n) in Stücke ≤ maxChars; harte Notbremse bei Übergröße. */
+/**
+ * Kapitel ohne verwertbaren Inhalt aussortieren.
+ *
+ * Zweites Netz hinter der Korrektur in packBySize: auch andere Dokumente
+ * können entartete Abschnitte hervorbringen — zwei Überschriften hintereinander,
+ * eine Trennlinie, ein Abschnitt aus einem einzigen Aufzählungszeichen. Daraus
+ * einen Artikel erzeugen zu lassen kostet Geld und liefert eine Seite, die
+ * ihre eigene Leere beschreibt.
+ *
+ * Gemessen wird der Text ohne Überschriften, Aufzählungszeichen und
+ * Zeichensetzung. Bleibt weniger als ein Satz übrig, ist es kein Kapitel.
+ * Ein Dokument, das insgesamt nur aus einem solchen Abschnitt besteht, wird
+ * nicht angetastet — dort ist die Leere die Aussage, und die vorhandene
+ * „Leerer-Content-Regel" im Prompt fängt sie sauber ab.
+ */
+const KAPITEL_MINDESTZEICHEN = 120;
+
+function verwertbareKapitel(chapters: Chapter[]): Chapter[] {
+  if (chapters.length <= 1) return chapters;
+
+  const substanz = (t: string) =>
+    t
+      .replace(/^#{1,6}\s+.*$/gm, "") // Überschriften
+      .replace(/^[\s>*+-]+$/gm, "") // Trennlinien, leere Listenpunkte
+      .replace(/\s+/g, " ")
+      .trim().length;
+
+  const behalten = chapters.filter((c) => substanz(c.text) >= KAPITEL_MINDESTZEICHEN);
+
+  const verworfen = chapters.length - behalten.length;
+  if (verworfen > 0) {
+    console.log(
+      `[wiki-gen] 🗑️ ${verworfen} Kapitel ohne Inhalt übersprungen (nur Überschrift o. ä.)`,
+    );
+  }
+  // Wenn dabei alles wegfiele, lieber das Original behalten als gar nichts.
+  return behalten.length > 0 ? behalten : chapters;
+}
+
 function packBySize(text: string, maxChars: number): string[] {
   const paras = text.split(/\n\n+/);
   const out: string[] = [];
   let cur = "";
   for (const p of paras) {
     if (p.length > maxChars) {
-      if (cur) {
-        out.push(cur);
-        cur = "";
-      }
-      for (let i = 0; i < p.length; i += maxChars) {
-        out.push(p.slice(i, i + maxChars));
+      // Angesammeltes VOR das übergroße Stück hängen, statt es als eigenes
+      // Teil abzulegen.
+      //
+      // Ein Transkript ist ein einziger, riesiger Absatz. Davor steht nur die
+      // Zeile „## Transkript". Die wurde hier als eigenständiges Teil
+      // ausgegeben und daraus entstand ein Kapitel „Transkript", das nichts
+      // enthielt als seine eigene Überschrift — samt generiertem Artikel, der
+      // wahrheitsgemäß meldete, das Dokument sei leer. Eine Überschrift gehört
+      // zu dem Text, den sie ankündigt.
+      const ganzes = cur ? `${cur}\n\n${p}` : p;
+      cur = "";
+      for (let i = 0; i < ganzes.length; i += maxChars) {
+        out.push(ganzes.slice(i, i + maxChars));
       }
       continue;
     }
@@ -1221,3 +1307,15 @@ function slugify(text: string): string {
 
 // getActiveProvider / callLLM / callLLMJson sind nach service/llm.ts extrahiert
 // (gemeinsam mit topic.ts genutzt) und werden oben importiert.
+
+/**
+ * Nur für Tests herausgereicht. Die drei Funktionen entscheiden, wie ein
+ * Dokument in Kapitel zerfällt — dort entstand das Geisterkapitel „Transkript".
+ * Sie sind rein und ohne Netzwerk, also einzeln prüfbar; sie gehören aber nicht
+ * zur Schnittstelle dieses Moduls.
+ */
+export const __test__ = {
+  splitIntoChapters,
+  packBySize,
+  verwertbareKapitel,
+};
