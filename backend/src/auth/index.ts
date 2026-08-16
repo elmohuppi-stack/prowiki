@@ -57,6 +57,9 @@ export const trustedOrigins = (process.env.TRUSTED_ORIGINS ?? BASE_URL)
  */
 const allowSignup = process.env.ALLOW_SIGNUP === "1";
 
+/** In Produktion gehen Cookies nur über TLS raus. Siehe `advanced` unten. */
+const useSecureCookies = process.env.NODE_ENV === "production";
+
 export const auth = betterAuth({
   appName: "prowiki",
   baseURL: BASE_URL,
@@ -98,8 +101,18 @@ export const auth = betterAuth({
     // httpOnly-Cookie statt Token im localStorage (Befund 2.8): ein Wiki rendert
     // fremdes Markdown, XSS ist damit ein reales Risiko und ein auslesbares
     // Token die falsche Ablage.
-    useSecureCookies: process.env.NODE_ENV === "production",
-    defaultCookieAttributes: { sameSite: "lax", httpOnly: true },
+    useSecureCookies,
+    // `secure` muss hier **noch einmal** stehen. `defaultCookieAttributes`
+    // ersetzt die Vorgaben, statt sie zu ergänzen — ohne diese Zeile gewinnt das
+    // Objekt gegen `useSecureCookies`, und der Sitzungscookie geht ohne
+    // Secure-Flag raus. Am 16. August live nachgemessen: NODE_ENV stand auf
+    // production, der Set-Cookie-Header lautete trotzdem
+    // `HttpOnly; SameSite=Lax` — ohne `Secure`.
+    defaultCookieAttributes: {
+      sameSite: "lax",
+      httpOnly: true,
+      secure: useSecureCookies,
+    },
   },
 
   rateLimit: {
