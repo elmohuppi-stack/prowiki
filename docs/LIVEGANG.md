@@ -301,6 +301,28 @@ jeden Wert nach dem Schreiben zurück.
 
 ---
 
+## 6b. Einmalig: fehlende Kapitel-Übersichten wiederherstellen
+
+Zwischen Commit 6b3e4ba und dem Fix in `service/wiki-generate.ts` löschte das
+Abräumen verwaister Kapitel die gerade erzeugte Übersichtsseite gleich wieder
+mit (sie trägt den Basis-Slug, die Kapitel `…-k1`, `-k2`, …, und stand nicht in
+der Sollmenge). Jedes in diesem Zeitraum neu generierte mehrteilige Dokument
+hat deshalb Kapitel ohne Übersicht — in der Trefferliste werden sie nicht mehr
+gebündelt.
+
+```sh
+ssh elmarhepp 'cd /var/www/prowiki && docker compose --profile tools run --rm \
+  prowiki-tools bun run src/scripts/repair-chapter-overviews.ts --dry-run'
+# Liste sieht plausibel aus? dann ohne --dry-run
+```
+
+Baut die Übersicht aus den vorhandenen Kapiteln neu (Titel aus dem
+Quelldokument, Inhaltsverzeichnis aus `sort_order`) — kein LLM-Lauf, keine
+Provider-Kosten. Idempotent: bestehende Übersichten bleiben unangetastet und
+zählen als „intakt".
+
+---
+
 ## 7. Nach dem Livegang
 
 1. **[platform/DEPLOYMENT.md](../../platform/DEPLOYMENT.md) ergänzen** — Zeile in der

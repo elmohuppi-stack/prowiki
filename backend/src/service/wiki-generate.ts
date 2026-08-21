@@ -549,7 +549,13 @@ export async function generateWikiArticles(
         ),
       );
 
+    // Die Übersichtsseite trägt den Basis-Slug und steht deshalb nicht in
+    // chapterSlugs (dort stehen `…-k1`, `-k2`, …). Ohne sie in der Sollmenge
+    // löschte dieser Abräumer die gerade erzeugte Übersicht sofort wieder –
+    // die Kapitel hingen dann an einem Elternteil, das es nicht mehr gab, und
+    // die Trefferliste bündelte sie nicht mehr.
     const aktuell = new Set(chapterSlugs);
+    if (multiChapter) aktuell.add(baseSlug);
     for (const p of alle) {
       if (aktuell.has(p.slug)) continue;
       if (p.manuell) {
