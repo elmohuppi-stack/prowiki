@@ -11,9 +11,12 @@ COPY packages/shared/src ./packages/shared/src
 COPY backend/package.json backend/tsconfig.json ./backend/
 RUN bun install
 
-# Build
+# Build: API und Worker sind zwei Einstiegspunkte im selben Bild. Ein zweites
+# Image wäre reine Verdopplung — sie teilen den ganzen Service-Code, und welcher
+# Prozess läuft, entscheidet das `command` im Compose.
 COPY backend/src ./backend/src
-RUN bun build ./backend/src/index.ts --outdir ./backend/dist --target bun
+RUN bun build ./backend/src/index.ts --outdir ./backend/dist --target bun \
+ && bun build ./backend/src/jobs/worker.ts --outdir ./backend/dist --target bun
 
 # ---------------------------------------------------------------------------
 # Werkzeug-Image: führt die Skripte unter backend/src/scripts aus

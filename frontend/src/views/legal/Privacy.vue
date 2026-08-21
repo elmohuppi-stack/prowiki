@@ -39,26 +39,54 @@
         solange das jeweilige Wiki auf <em>privat</em> steht.
       </p>
 
-      <h2>Externe Dienste — auch außerhalb der EU</h2>
+      <h2>Sprachmodelle — der Anbieter ist deine Wahl</h2>
       <p>
-        prowiki erzeugt Texte und durchsucht Inhalte mit Sprachmodellen. Dabei
-        verlassen Daten unseren Server:
+        prowiki erzeugt Texte und durchsucht Inhalte mit Sprachmodellen. Diese
+        Modelle betreiben wir nicht selbst: <strong>jede Organisation trägt ihren
+        eigenen Anbieter samt eigenem Zugangsschlüssel ein</strong> (in den
+        Einstellungen unter <em>Modelle</em>). Wohin deine Inhalte gehen,
+        entscheidest damit du — nicht wir.
       </p>
+      <p>
+        Übertragen wird an den von dir eingetragenen Anbieter:
+      </p>
+      <ul>
+        <li>
+          <strong>Beim Chat</strong> deine Frage und die Textabschnitte, die die
+          Suche dazu herangezogen hat.
+        </li>
+        <li>
+          <strong>Beim Import</strong> der Inhalt des Dokuments — auch ohne dass
+          du eine Frage stellst. Aus ihm werden die Wiki-Artikel erzeugt.
+        </li>
+        <li>
+          <strong>Für die Suche</strong> Textabschnitte an den Anbieter, den du
+          für Suchvektoren eingetragen hast.
+        </li>
+      </ul>
+      <p>
+        Ist für deine Organisation kein Anbieter eingetragen, findet keine
+        Übermittlung statt — dann bleiben Chat und Artikel-Erzeugung ohne
+        Ergebnis. Ein Ausweichen auf einen Anbieter, den du nicht gewählt hast,
+        gibt es nicht.
+      </p>
+      <p>
+        <strong>Wenn der von dir gewählte Anbieter außerhalb der EU sitzt</strong>,
+        ist das eine Übermittlung in ein Drittland. Für manche Länder — etwa die
+        USA — besteht ein Angemessenheitsbeschluss der Europäischen Kommission,
+        für andere — etwa China — nicht. Welches Land es ist, ergibt sich aus dem
+        Anbieter, den du hinterlegt hast; prüfe das, bevor du personenbezogene
+        oder vertrauliche Inhalte einstellst. Die Verarbeitung durch das
+        Sprachmodell ist der Zweck der Anwendung und lässt sich nicht einzeln
+        abwählen — der Anbieter dagegen schon.
+      </p>
+
+      <h2>Weitere externe Dienste</h2>
       <table>
         <thead>
           <tr><th>Dienst</th><th>Was übertragen wird</th><th>Sitz</th></tr>
         </thead>
         <tbody>
-          <tr>
-            <td>DeepSeek</td>
-            <td>Deine Chat-Fragen samt der dafür herangezogenen Textabschnitte</td>
-            <td>China</td>
-          </tr>
-          <tr>
-            <td>OpenAI</td>
-            <td>Textabschnitte deiner Dokumente zur Berechnung von Suchvektoren</td>
-            <td>USA</td>
-          </tr>
           <tr>
             <td>Apify / Supadata</td>
             <td>Video-Adressen zum Abruf öffentlicher Transkripte — keine Nutzereingaben</td>
@@ -66,14 +94,6 @@
           </tr>
         </tbody>
       </table>
-      <p>
-        Die Übermittlung an DeepSeek und OpenAI ist eine Übermittlung in ein
-        Drittland. Für die USA besteht ein Angemessenheitsbeschluss der
-        Europäischen Kommission; für China besteht keiner. Wer das nicht möchte,
-        sollte prowiki nicht für personenbezogene oder vertrauliche Inhalte
-        nutzen — die Verarbeitung durch das Sprachmodell ist der Zweck der
-        Anwendung und lässt sich nicht einzeln abwählen.
-      </p>
 
       <h2>Speicher im Browser</h2>
       <p>

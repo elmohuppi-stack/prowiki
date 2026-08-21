@@ -10,16 +10,34 @@
 import { db } from "../db/index.ts";
 import { modelProviders } from "../db/schema.ts";
 import { and, eq, desc } from "drizzle-orm";
+import { verschlüssele, entschlüssele } from "./crypto.ts";
 
 function maskKey(key: string): string {
   if (key.length <= 8) return "***";
   return key.slice(0, 4) + "…" + key.slice(-4);
 }
 
-/** Nie den Schlüssel selbst herausgeben, nur eine Wiedererkennungshilfe. */
+/**
+ * Nie den Schlüssel selbst herausgeben, nur eine Wiedererkennungshilfe.
+ *
+ * Die Vorschau wird aus dem **entschlüsselten** Wert gebildet. Aus dem
+ * Geheimtext gebildet wäre sie wertlos: „enc:…Xy4=" hilft niemandem, seinen
+ * Schlüssel wiederzuerkennen, und genau dazu ist sie da. Herausgegeben werden
+ * dabei acht Zeichen — bei einem Schlüssel mit über vierzig ist das keine
+ * Preisgabe, sondern der Zweck.
+ */
 function present<T extends { api_key_encrypted: string }>(provider: T) {
   const { api_key_encrypted, ...rest } = provider;
-  return { ...rest, api_key_preview: maskKey(api_key_encrypted) };
+  let klar = api_key_encrypted;
+  try {
+    klar = entschlüssele(api_key_encrypted);
+  } catch {
+    // Ein Wert, der sich nicht entschlüsseln lässt (falscher AUTH_SECRET,
+    // beschädigte Zeile), darf die Liste nicht unbenutzbar machen — sonst kommt
+    // man in der Oberfläche nicht mehr an den Provider, um ihn zu ersetzen.
+    return { ...rest, api_key_preview: "!! nicht entschlüsselbar" };
+  }
+  return { ...rest, api_key_preview: maskKey(klar) };
 }
 
 export async function listProviders(organizationId: string) {
@@ -50,7 +68,10 @@ export async function createProvider(
       name: data.name,
       provider_type: data.provider_type,
       api_base_url: data.api_base_url,
-      api_key_encrypted: data.api_key,
+      // Verschlüsselt ablegen. Die Spalte hieß von Anfang an
+      // `api_key_encrypted` und enthielt bis zum 21. August 2026 Klartext —
+      // siehe service/crypto.ts.
+      api_key_encrypted: verschlüssele(data.api_key),
       default_model: data.default_model,
       is_active: data.is_active ?? true,
     })
@@ -74,7 +95,7 @@ export async function updateProvider(
   if (data.name) updateData.name = data.name;
   if (data.provider_type) updateData.provider_type = data.provider_type;
   if (data.api_base_url) updateData.api_base_url = data.api_base_url;
-  if (data.api_key) updateData.api_key_encrypted = data.api_key;
+  if (data.api_key) updateData.api_key_encrypted = verschlüssele(data.api_key);
   if (data.default_model) updateData.default_model = data.default_model;
   if (data.is_active !== undefined) updateData.is_active = data.is_active;
 

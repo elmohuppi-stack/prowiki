@@ -12,7 +12,6 @@ import { db } from "../db/index.ts";
 import {
   documents,
   wikiPages,
-  modelProviders,
   wikis,
   chunks,
 } from "../db/schema.ts";
@@ -34,6 +33,7 @@ import {
 import * as wikiService from "./wiki.ts";
 import * as topicService from "./topic.ts";
 import { getActiveProvider, callLLM, callLLMJson } from "./llm.ts";
+import { USAGE } from "./usage.ts";
 import { getGlossary, glossaryForPrompt } from "./glossary.ts";
 
 // ---------------------------------------------------------------------------
@@ -170,7 +170,7 @@ export async function generateWikiArticles(
   }
 
   // 2. Aktiven Chat-Provider laden
-  const provider = await getActiveProvider();
+  const provider = await getActiveProvider({ wikiId });
   if (!provider) {
     console.log(`[wiki-gen] ❌ Kein Chat-Provider konfiguriert`);
     return null;
@@ -323,6 +323,7 @@ export async function generateWikiArticles(
           .replace(/\{\{language\}\}/g, language)
           .replace("{{previousSlugs}}", previousSlugs || "Keine")
           .replace("{{granularityGuidance}}", granularityGuidance(granularity)),
+        { kind: USAGE.llmWikiGenerate, wikiId, refId: docId },
       );
       if (!extractionJson) continue;
       for (const it of [
@@ -597,6 +598,7 @@ export async function generateWikiArticles(
         WIKI_CHUNK_CITATION_PROMPT.replace("{{candidateSlugs}}", candidateList)
           .replace("{{chunksXml}}", chunksXml)
           .replace(/\{\{language\}\}/g, language),
+        { kind: USAGE.llmWikiGenerate, wikiId, refId: docId },
       );
       if (!citeJson) continue;
 
@@ -690,7 +692,11 @@ export async function generateWikiArticles(
       sessionLabel: doc.title,
       zeitmarkenRegel: zeitmarken,
     });
-    const raw = await callLLM(provider, pagePrompt);
+    const raw = await callLLM(provider, pagePrompt, {
+      kind: USAGE.llmWikiGenerate,
+      wikiId,
+      refId: docId,
+    });
     if (!raw) continue;
 
     const sumMatch = raw.match(/SUMMARY:\s*(.+)/im);
@@ -793,22 +799,33 @@ export async function generateWikiArticles(
   }
 
   // Neu erzeugte Wiki-Chunks embedden, damit sie in der Vektorsuche (Chat-RAG)
-  // auffindbar sind (nicht-blockierend – hält den Wiki-Gen-Response nicht auf).
+  // auffindbar sind.
   //
-  // Mit WIKI_EMBED_AFTER_GENERATE=0 abschaltbar, und das ist bei Massenläufen
-  // zwingend: embedWorkspaceChunks arbeitet wiki-weit, nicht
-  // dokumentbezogen. Bei hunderten Aufrufen laufen entsprechend viele Sweeps
-  // gleichzeitig über dieselben Zeilen (kein FOR UPDATE SKIP LOCKED), embedden
-  // Chunks doppelt und belegen dabei den DB-Pool. Stattdessen einmal
-  // embed-backfill.ts am Ende des Laufs.
+  // Seit dem 21. August ein Job statt eines nicht abgewarteten `.then()`. Das
+  // löst zwei Dinge auf einmal:
+  //
+  // 1. Ein Neustart verlor den Lauf, und weil `chunks.embedding` dabei `NULL`
+  //    blieb, waren die Chunks für die Suche unsichtbar — ohne Fehlermeldung.
+  // 2. `embedWorkspaceChunks` arbeitet wiki-weit, nicht dokumentbezogen. Bei
+  //    hunderten Aufrufen liefen entsprechend viele Sweeps gleichzeitig über
+  //    dieselben Zeilen (kein FOR UPDATE SKIP LOCKED), embedded Chunks doppelt
+  //    und belegten dabei den DB-Pool. Der `singletonKey` je Wiki lässt davon
+  //    einen übrig, der alles Offene mitnimmt (jobs/queue.ts).
+  //
+  // WIKI_EMBED_AFTER_GENERATE=0 schaltet es weiter ab. Für Massenläufe ist es
+  // damit nicht mehr *zwingend* — ein `embed-backfill.ts` am Ende bleibt aber
+  // der schnellere Weg, weil er die Warteschlange gar nicht erst anfasst.
   if (process.env.WIKI_EMBED_AFTER_GENERATE !== "0") {
-    import("./embedding.ts")
-      .then(({ embedWorkspaceChunks }) =>
-        embedWorkspaceChunks(wikiId).then((r) =>
-          console.log(`[wiki-gen] 🧠 ${r.processed} Wiki-Chunks embedded`),
-        ),
-      )
-      .catch((e) => console.warn(`[wiki-gen] Embedding-Trigger fehlgeschlagen:`, e));
+    try {
+      const { QUEUE, enqueue } = await import("../jobs/queue.ts");
+      await enqueue(
+        QUEUE.embed,
+        { wikiId },
+        { singletonKey: `embed:${wikiId}`, singletonSeconds: 60 },
+      );
+    } catch (e: any) {
+      console.warn(`[wiki-gen] Embedding-Job nicht eingestellt:`, e?.message ?? e);
+    }
   }
 
   // Auto-Themen-Klassifikation (Ebene 1): nur wenn der Wiki Themen hat und

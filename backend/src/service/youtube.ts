@@ -86,6 +86,13 @@ export function extractVideoId(url: string): string | null {
  */
 export async function fetchYouTubeInfo(
   videoId: string,
+  /**
+   * Nur für die Kostenzählung. Ein Abruf kostet echtes Apify- oder
+   * Supadata-Guthaben, und zwar je Video — beim Kanal-Import aus Stufe 1 ist
+   * das der Posten, der als erster wehtut. Optional, damit vorhandene Aufrufer
+   * greifen; ohne ihn bleibt der Abruf ungezählt.
+   */
+  wikiId?: string,
 ): Promise<YouTubeInfo | null> {
   const provider = getProvider();
 
@@ -95,6 +102,22 @@ export async function fetchYouTubeInfo(
   const t0 = Date.now();
 
   const { metadata, transcript } = await provider.fetchVideoInfo(videoId);
+
+  // Gezählt wird der **Abruf**, nicht der Erfolg: ein Anbieter, der nichts
+  // liefert, hat trotzdem abgerechnet. Genau deshalb steht der Aufruf hier und
+  // nicht hinter der Erfolgsprüfung weiter unten.
+  if (wikiId) {
+    const { USAGE, zähleNutzung, TRANSKRIPT_KOSTEN_MICROS } = await import(
+      "./usage.ts"
+    );
+    await zähleNutzung({
+      kind: USAGE.transcriptFetch,
+      wikiId,
+      model: provider.name,
+      costMicros: TRANSKRIPT_KOSTEN_MICROS,
+      refId: videoId,
+    });
+  }
 
   const elapsed = Date.now() - t0;
   console.log(

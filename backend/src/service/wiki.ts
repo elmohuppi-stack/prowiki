@@ -5,7 +5,6 @@ import {
   documents,
   chunks,
   wikis,
-  modelProviders,
   documentTopics,
 } from "../db/schema.ts";
 import {
@@ -24,6 +23,7 @@ import {
   getTableColumns,
 } from "drizzle-orm";
 import { splitIntoChunks, saveChunks } from "./document.ts";
+import { holeProvider } from "./provider.ts";
 
 /**
  * Obergrenze für page_size. Vorher unbegrenzt – ein page_size=100000 hätte den
@@ -914,32 +914,9 @@ export async function generateWikiPage(
     `[wiki] Dokument geladen: "${doc.title}" (${doc.content.length} Zeichen)`,
   );
 
-  // Aktiven Chat-Provider laden
-  const providers = await db
-    .select()
-    .from(modelProviders)
-    .where(
-      and(
-        eq(modelProviders.is_active, true),
-        eq(modelProviders.provider_type, "chat"),
-      ),
-    )
-    .limit(1);
-
-  let provider = providers[0];
-  if (!provider) {
-    const both = await db
-      .select()
-      .from(modelProviders)
-      .where(
-        and(
-          eq(modelProviders.is_active, true),
-          eq(modelProviders.provider_type, "both"),
-        ),
-      )
-      .limit(1);
-    provider = both[0];
-  }
+  // Aktiven Chat-Provider laden — über die Organisation dieses Wiki, nicht
+  // über "die erste aktive Zeile". Begründung in service/provider.ts.
+  const provider = await holeProvider("chat", { wikiId });
 
   if (!provider) {
     console.warn(
@@ -949,7 +926,7 @@ export async function generateWikiPage(
   }
 
   console.log(
-    `[wiki] LLM-Provider: ${provider.name || provider.provider_type} (${provider.default_model})`,
+    `[wiki] LLM-Provider: ${provider.name} (${provider.default_model}, ${provider.herkunft})`,
   );
   console.log(`[wiki] API-Base: ${provider.api_base_url}`);
 
@@ -1029,7 +1006,7 @@ ${doc.content}`;
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${provider.api_key_encrypted}`,
+        Authorization: `Bearer ${provider.api_key}`,
       },
       body: JSON.stringify({
         model: provider.default_model,

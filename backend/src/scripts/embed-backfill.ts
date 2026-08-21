@@ -8,12 +8,14 @@
  *
  * Usage:
  *   bun run src/scripts/embed-backfill.ts [wiki-id] [--batch=128]
- *   (ohne wiki-id: alle Wikis)
+ *   (ohne wiki-id: alle Wikis mit offenen Chunks, jedes mit seinem eigenen
+ *    Embedding-Provider — siehe verarbeiteWiki)
  */
 
 import { db } from "../db/index.ts";
-import { chunks, modelProviders } from "../db/schema.ts";
+import { chunks } from "../db/schema.ts";
 import { eq, and, isNull, sql } from "drizzle-orm";
+import { holeProvider, type AufgelösterProvider } from "../service/provider.ts";
 
 const args = process.argv.slice(2);
 const wikiFilter = args.find((a) => !a.startsWith("--")) || null;
@@ -22,30 +24,29 @@ const batchSize = Number(
 );
 const MAX_CHARS = 8000; // pro Input kürzen (Token-Limit-Sicherheit)
 
-async function getProvider() {
-  const [p] = await db
-    .select()
-    .from(modelProviders)
-    .where(
-      and(
-        eq(modelProviders.is_active, true),
-        eq(modelProviders.provider_type, "embedding"),
-      ),
-    )
-    .limit(1);
-  if (!p) throw new Error("Kein aktiver Embedding-Provider konfiguriert");
+/**
+ * Provider des Wiki, gegen das dieses Skript läuft.
+ *
+ * Auch hier vorher „erste aktive Zeile" — in einem Wartungsskript besonders
+ * heikel, weil es über zehntausende Chunks läuft und ein falscher Anbieter
+ * bedeutet: alle Vektoren aus einem fremden Modell, unbrauchbar für die Suche
+ * dieses Wiki, und bezahlt hat es jemand anderes.
+ */
+async function getProvider(wikiId: string) {
+  const p = await holeProvider("embedding", { wikiId });
+  if (!p) throw new Error("Kein aktiver Embedding-Provider für dieses Wiki");
   return p;
 }
 
 async function embedBatch(
-  provider: typeof modelProviders.$inferSelect,
+  provider: AufgelösterProvider,
   inputs: string[],
 ): Promise<(number[] | null)[]> {
   const resp = await fetch(`${provider.api_base_url}/embeddings`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${provider.api_key_encrypted}`,
+      Authorization: `Bearer ${provider.api_key}`,
     },
     body: JSON.stringify({ model: provider.default_model, input: inputs }),
     signal: AbortSignal.timeout(60000),
@@ -60,23 +61,27 @@ async function embedBatch(
   return arr.map((d) => (Array.isArray(d.embedding) ? d.embedding : null));
 }
 
-async function main() {
-  const provider = await getProvider();
-  console.log(`🔌 Provider: ${provider.default_model} @ ${provider.api_base_url}`);
+/**
+ * Ein Wiki abarbeiten — mit **seinem** Provider.
+ *
+ * Die Aufteilung je Wiki ist keine Kosmetik: seit die Provider je Organisation
+ * getrennt sind (service/provider.ts), gibt es keinen einen Anbieter mehr, mit
+ * dem man „alle Chunks" einbetten könnte. Zwei Wikis verschiedener
+ * Organisationen können verschiedene Modelle benutzen, und Vektoren aus zwei
+ * Modellen im selben Index sind wertlos — sie spannen verschiedene Räume auf.
+ */
+async function verarbeiteWiki(wikiId: string): Promise<{ done: number; failed: number }> {
+  const provider = await getProvider(wikiId);
+  console.log(
+    `\n🔌 Wiki ${wikiId}: ${provider.default_model} @ ${provider.api_base_url} (${provider.herkunft})`,
+  );
 
   const [{ total }] = await db
     .select({ total: sql<number>`count(*)` })
     .from(chunks)
-    .where(
-      wikiFilter
-        ? and(isNull(chunks.embedding), eq(chunks.wiki_id, wikiFilter))
-        : isNull(chunks.embedding),
-    );
-  console.log(`📊 ${total} Chunks ohne Embedding${wikiFilter ? ` (Wiki ${wikiFilter})` : ""}`);
-  if (Number(total) === 0) {
-    console.log("✨ Nichts zu tun.");
-    process.exit(0);
-  }
+    .where(and(isNull(chunks.embedding), eq(chunks.wiki_id, wikiId)));
+  console.log(`📊 ${total} Chunks ohne Embedding`);
+  if (Number(total) === 0) return { done: 0, failed: 0 };
 
   let done = 0;
   let failed = 0;
@@ -86,11 +91,7 @@ async function main() {
     const rows = await db
       .select({ id: chunks.id, content: chunks.content })
       .from(chunks)
-      .where(
-        wikiFilter
-          ? and(isNull(chunks.embedding), eq(chunks.wiki_id, wikiFilter))
-          : isNull(chunks.embedding),
-      )
+      .where(and(isNull(chunks.embedding), eq(chunks.wiki_id, wikiId)))
       .limit(batchSize);
 
     if (rows.length === 0) break;
@@ -113,14 +114,13 @@ async function main() {
       }
     }
     if (vectors === null) {
-      console.error(`\n❌ Batch endgültig fehlgeschlagen – überspringe (bleibt NULL, später erneut versuchen)`);
+      console.error(
+        `\n❌ Batch endgültig fehlgeschlagen – überspringe (bleibt NULL, später erneut versuchen)`,
+      );
       failed += rows.length;
-      // Endlosschleife vermeiden: eine dieser Zeilen mit Leer-Vektor blocken
-      // ist nicht sinnvoll → wir brechen ab, Rest via erneutem Lauf.
       break;
     }
 
-    // Updates ausführen (parallel, aber begrenzt)
     await Promise.all(
       rows.map(async (r, i) => {
         const v = vectors[i];
@@ -143,8 +143,50 @@ async function main() {
     );
   }
 
+  return { done, failed };
+}
+
+async function main() {
+  const t0 = Date.now();
+
+  // Ohne Wiki-Angabe: alle Wikis, die offene Chunks haben — jedes mit seinem
+  // eigenen Provider. Ein Wiki, dessen Organisation keinen aktiven Provider
+  // hat, lässt den Lauf nicht scheitern: es wird gemeldet und übersprungen,
+  // sonst blockiert ein einzelner fehlender Schlüssel den ganzen Bestand.
+  const wikiIds = wikiFilter
+    ? [wikiFilter]
+    : (
+        await db
+          .selectDistinct({ wiki_id: chunks.wiki_id })
+          .from(chunks)
+          .where(isNull(chunks.embedding))
+      ).map((r) => r.wiki_id);
+
+  if (wikiIds.length === 0) {
+    console.log("✨ Nichts zu tun.");
+    process.exit(0);
+  }
+  console.log(`📚 ${wikiIds.length} Wiki(s) mit offenen Chunks`);
+
+  let done = 0;
+  let failed = 0;
+  const übersprungen: string[] = [];
+
+  for (const wikiId of wikiIds) {
+    try {
+      const r = await verarbeiteWiki(wikiId);
+      done += r.done;
+      failed += r.failed;
+    } catch (e: any) {
+      console.warn(`\n⚠️ Wiki ${wikiId} übersprungen: ${e.message}`);
+      übersprungen.push(wikiId);
+    }
+  }
+
   console.log(
-    `\n✨ Fertig: ${done} embedded, ${failed} failed in ${((Date.now() - t0) / 1000).toFixed(0)}s`,
+    `\n✨ Fertig: ${done} embedded, ${failed} failed` +
+      (übersprungen.length > 0 ? `, ${übersprungen.length} Wiki(s) ohne Provider` : "") +
+      ` in ${((Date.now() - t0) / 1000).toFixed(0)}s`,
   );
   process.exit(0);
 }

@@ -378,6 +378,14 @@ Für die Architektur hier genügen zwei Ergebnisse daraus:
 
 ### 5.5 Rechtliches — vor dem ersten Fremdkunden zu klären
 
+> **Der Drittlandtransfer ist am 21. August 2026 wesentlich kleiner geworden.**
+> Nicht durch eine Rechtsgrundlage, sondern weil jede Organisation ihren eigenen
+> LLM-Anbieter samt Schlüssel einträgt — die Wahl des Empfängerlands liegt damit
+> beim Kunden, nicht bei prowiki. Der Code hielt das vorher nicht ein; der Befund
+> und was offen bleibt (Anbieter in der Oberfläche zeigen, AV-Vertrag, und der
+> ganze Abschnitt für den Fall eines Plattform-Kontingents) stehen in
+> [DRITTLAND-DEEPSEEK.md](DRITTLAND-DEEPSEEK.md).
+
 17. **AGB, Datenschutzerklärung, Auftragsverarbeitungsvertrag, Impressumspflicht pro Wiki.**
     Sobald Dritte Inhalte veröffentlichen, ist prowiki Hoster. Ein deutsches Angebot braucht
     das, bevor der erste externe Kunde live geht — nicht danach.
@@ -397,6 +405,17 @@ Für die Architektur hier genügen zwei Ergebnisse daraus:
 Code aus knora übernehmen · Better Auth einsetzen, Hintertür aus 2.1 entfernen ·
 Org/Wiki/Member-Schema · Capability-Prüfung zentral · Sichtbarkeit `private|link|public` ·
 pg-boss + Worker-Container · Rate-Limits · Audit-Log.
+
+**Stand 21. August 2026 — was davon steht:**
+
+| Punkt | Stand |
+|---|---|
+| Code, Better Auth, Hintertür weg, Org/Wiki/Member, Capabilities, Sichtbarkeit | erledigt (Livegang 16. August) |
+| **pg-boss + Worker-Container** | **erledigt** — `backend/src/jobs/`, Container `prowiki-worker`. Durch einen Test belegt: ein Job, der in einem Prozess eingestellt wird, wird nach dessen Ende von einem neuen abgeholt |
+| **Rate-Limits** | **erledigt** — `middleware/rate-limit.ts` auf Import, Transkriptabruf, Chat und Generierung. Ausdrücklich Schutz gegen den eigenen Klick, noch keiner gegen Fremde: der Zähler liegt im Speicher und gehört in die Datenbank, sobald die API mehrfach läuft |
+| **Kostenzählung** (`usage_events`, KONZEPT 4.5) | **erledigt** — Tokens gemessen, Preise geschätzt, `GET /api/v1/usage/…`. Steht nicht in der Zeile oben, gehört aber vor Stufe 1: ohne sie ist der Kanal-Import ein Blindflug durchs Guthaben |
+| **Mandantentrennung der LLM-Provider** | **erledigt am 21. August** — `service/provider.ts`. Vorher nahmen sechs Stellen „die erste aktive Zeile" ohne `organization_id`: mit zwei Mandanten wären Inhalte über den Schlüssel des anderen gelaufen. Dazu sind die Schlüssel jetzt wirklich verschlüsselt (`service/crypto.ts`) — die Spalte hieß `api_key_encrypted` und enthielt Klartext |
+| **Audit-Log** (`audit_events`) | **offen** — die Tabelle steht seit dem Livegang in `schema/tenancy.ts`, es schreibt sie **nichts**. Zu tun: Anmeldung, Rollenwechsel, Freigabe, Löschung. Der einzige verbliebene Punkt aus dieser Zeile |
 
 ### Stufe 1 — Kanal-Import in Serie
 `channel.sync` + `video.ingest` · YouTube Data API zum Backfill, RSS zur Fortschreibung ·

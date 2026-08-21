@@ -3,3 +3,12 @@ dist/
 .env
 *.log
 .DS_Store
+
+# Durchgangsablage für Uploads zwischen API und Worker (SPOOL_DIR).
+# Im Betrieb ein Docker-Volume, lokal dieses Verzeichnis.
+.spool/
+
+# Bytecode des Parsers. War versioniert und änderte sich bei jedem Start des
+# Containers — damit stand nach jedem Lauf eine fremde Änderung in git status.
+__pycache__/
+*.pyc

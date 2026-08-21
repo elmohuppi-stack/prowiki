@@ -1,6 +1,7 @@
 import { db } from "../db/index.ts";
-import { chunks, documents, modelProviders } from "../db/schema.ts";
+import { chunks, documents } from "../db/schema.ts";
 import { eq, and, sql } from "drizzle-orm";
+import { holeProvider } from "./provider.ts";
 
 export interface SearchResult {
   chunk_id: string;
@@ -49,7 +50,7 @@ async function vectorSearch(
 ): Promise<SearchResult[]> {
   try {
     // Zuerst Embedding für Query generieren
-    const vector = await generateQueryEmbedding(query);
+    const vector = await generateQueryEmbedding(query, wikiId);
     if (!vector) return [];
 
     // pgvector cosine similarity Abfrage.
@@ -133,20 +134,24 @@ async function keywordSearch(
   }
 }
 
-// Embedding für Query generieren (gleicher Provider wie für Chunks)
-async function generateQueryEmbedding(text: string): Promise<number[] | null> {
-  const providers = await db
-    .select()
-    .from(modelProviders)
-    .where(
-      and(
-        eq(modelProviders.is_active, true),
-        eq(modelProviders.provider_type, "embedding"),
-      ),
-    )
-    .limit(1);
-
-  const provider = providers[0];
+/**
+ * Embedding für die Suchanfrage — **derselbe Provider wie für die Chunks**.
+ *
+ * Das war schon vorher die Absicht („gleicher Provider wie für Chunks"), aber
+ * nicht das Verhalten: die Abfrage hier nahm die erste aktive Zeile ohne
+ * `organization_id`, genau wie embedding.ts. Bei zwei Mandanten hätten Anfrage
+ * und Chunks von **verschiedenen** Modellen kommen können — und dann ist die
+ * Vektorsuche nicht bloß mandantenverwechselt, sie liefert Unsinn: zwei
+ * Modelle spannen verschiedene Räume auf, Kosinusähnlichkeit zwischen ihnen
+ * bedeutet nichts.
+ *
+ * Deshalb geht `wikiId` jetzt bis hierher durch.
+ */
+async function generateQueryEmbedding(
+  text: string,
+  wikiId: string,
+): Promise<number[] | null> {
+  const provider = await holeProvider("embedding", { wikiId });
   if (!provider) return null;
 
   try {
@@ -154,7 +159,7 @@ async function generateQueryEmbedding(text: string): Promise<number[] | null> {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${provider.api_key_encrypted}`,
+        Authorization: `Bearer ${provider.api_key}`,
       },
       body: JSON.stringify({
         model: provider.default_model,

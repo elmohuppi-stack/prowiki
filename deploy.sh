@@ -85,3 +85,11 @@ ssh "$HOST" "
 echo "✅ Deployt. Prüfen:"
 echo "   ssh $HOST 'docker compose --project-directory $REMOTE_DIR ps'"
 echo "   curl -s https://${APP_SLUG}.elmarhepp.de/health"
+echo
+# Seit dem 21. August tragen laufende Importe einen Neustart. Vorher hingen sie
+# als setTimeout im API-Prozess, und genau dieses `up --build` oben verlor sie
+# still — ohne Fehler, ohne Log, das Dokument blieb auf "processing" stehen.
+# Der Blick in die Warteschlange sagt, ob der Worker sie aufgenommen hat.
+echo "   Warteschlange (offene Jobs, sollte nach kurzer Zeit leer sein):"
+echo "   ssh $HOST 'docker exec pg-shared psql -U ${DB_USER:-prowiki} -d ${DB_NAME:-prowiki} \\"
+echo "     -c \"select name, state, count(*) from pgboss.job group by 1,2 order by 1,2\"'"

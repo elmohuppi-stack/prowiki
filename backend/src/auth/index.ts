@@ -20,6 +20,7 @@ import { organization } from "better-auth/plugins";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { ac, roles } from "./permissions.ts";
+import { sendeMail, resetMail, verifikationsMail } from "../service/mail.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -76,10 +77,9 @@ export const auth = betterAuth({
     requireEmailVerification: true,
     minPasswordLength: 12,
     async sendResetPassword({ user, url }) {
-      // Stufe 0 hat noch keinen Mailversand. Bis der steht, landet der Link im
-      // Log — funktionsfähig für die Entwicklung, und der fehlende Versand ist
-      // sichtbar statt stillschweigend.
-      console.log(`[auth] Passwort-Reset für ${user.email}: ${url}`);
+      // Ohne SMTP_HOST landet der Link im Log statt in einer Mail — service/mail.ts
+      // erklärt, warum das der richtige Rückfall ist und nicht ein Fehler.
+      await sendeMail({ an: user.email, ...resetMail(url) });
     },
   },
 
@@ -87,7 +87,7 @@ export const auth = betterAuth({
     sendOnSignUp: true,
     autoSignInAfterVerification: true,
     async sendVerificationEmail({ user, url }) {
-      console.log(`[auth] Verifikation für ${user.email}: ${url}`);
+      await sendeMail({ an: user.email, ...verifikationsMail(url) });
     },
   },
 

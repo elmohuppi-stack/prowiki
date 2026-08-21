@@ -4,8 +4,9 @@ import { zValidator } from "@hono/zod-validator";
 import { sessionMiddleware } from "../middleware/auth.ts";
 import { wikiParamAccess } from "../middleware/access.ts";
 import * as wikiService from "../service/wiki.ts";
-import * as chatWiki from "../service/wiki-from-chat.ts";
 import * as activityLog from "../service/activity-log.ts";
+import { QUEUE, enqueue } from "../jobs/queue.ts";
+import { LIMITS } from "../middleware/rate-limit.ts";
 
 const pageRouter = new Hono();
 pageRouter.use("*", sessionMiddleware);
@@ -134,6 +135,7 @@ const fromChatSchema = z.object({
 // nicht veröffentlichte Entwürfe derselben Session ("Regenerieren = ersetzen").
 pageRouter.post(
   "/:wikiId/from-chat",
+  LIMITS.generate,
   zValidator("json", fromChatSchema),
   async (c) => {
     const wikiId = c.req.param("wikiId");
@@ -143,28 +145,25 @@ pageRouter.post(
     await wikiService.deleteSessionDrafts(wikiId, data.session_id);
 
     const clusterId = crypto.randomUUID();
-    // Fire-and-forget; Fortschritt via Activity-Log, Ergebnis via /drafts-Poll.
-    setTimeout(() => {
-      chatWiki
-        .generateClusterFromChat({
-          wikiId,
-          sessionId: data.session_id,
-          clusterId,
-          spec: {
-            instructions: data.instructions,
-            audience: data.audience,
-            style: data.style,
-            length: data.length,
-            max_subpages: data.max_subpages,
-            max_entities: data.max_entities,
-            use_rag: data.use_rag,
-          },
-          userId: principal.userId ?? undefined,
-        })
-        .catch((e: any) =>
-          console.error(`[chat-wiki] Generierung fehlgeschlagen:`, e.message),
-        );
-    }, 50);
+    // Fortschritt via Activity-Log, Ergebnis via /drafts-Poll. Der Lauf selbst
+    // gehört in die Warteschlange und nicht in ein `setTimeout`: er dauert
+    // Minuten und kostet LLM-Guthaben, und beides zweimal zu bezahlen, weil ein
+    // Deployment dazwischenkam, ist der teuerste Weg, nichts zu bekommen.
+    await enqueue(QUEUE.chatCluster, {
+      wikiId,
+      sessionId: data.session_id,
+      clusterId,
+      spec: {
+        instructions: data.instructions,
+        audience: data.audience,
+        style: data.style,
+        length: data.length,
+        max_subpages: data.max_subpages,
+        max_entities: data.max_entities,
+        use_rag: data.use_rag,
+      },
+      userId: principal.userId ?? undefined,
+    });
 
     return c.json({ cluster_id: clusterId }, 202);
   },
@@ -314,7 +313,7 @@ pageRouter.delete("/:wikiId/pages/:slug", async (c) => {
 });
 
 // Wiki-Seite aus Dokument generieren (neue Pipeline)
-pageRouter.post("/:wikiId/generate/:documentId", async (c) => {
+pageRouter.post("/:wikiId/generate/:documentId", LIMITS.generate, async (c) => {
   const wikiId = c.req.param("wikiId");
   const documentId = c.req.param("documentId");
 

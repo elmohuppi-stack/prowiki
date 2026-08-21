@@ -1,43 +1,33 @@
 import { db } from "../db/index.ts";
-import { chunks, modelProviders, documents } from "../db/schema.ts";
+import { chunks, documents } from "../db/schema.ts";
 import { eq, isNull, and, sql, notInArray } from "drizzle-orm";
+import { USAGE, zähleNutzung, tokensAus } from "./usage.ts";
+import { holeProvider, type AufgelösterProvider } from "./provider.ts";
 
-// Aktiven Embedding-Provider aus DB laden (einmal auflösen, dann wiederverwenden –
-// spart bei großen Dokumenten tausende identische DB-Abfragen).
-async function getActiveEmbeddingProvider(): Promise<
-  typeof modelProviders.$inferSelect | null
-> {
-  const providers = await db
-    .select()
-    .from(modelProviders)
-    .where(
-      and(
-        eq(modelProviders.is_active, true),
-        eq(modelProviders.provider_type, "embedding"),
-      ),
-    )
-    .limit(1);
-
-  if (providers.length > 0) return providers[0];
-
-  // Fallback: Chat-Provider mit Embedding-Fähigkeit
-  const chatProviders = await db
-    .select()
-    .from(modelProviders)
-    .where(
-      and(
-        eq(modelProviders.is_active, true),
-        eq(modelProviders.provider_type, "both"),
-      ),
-    )
-    .limit(1);
-
-  return chatProviders[0] ?? null;
+/**
+ * Aktiven Embedding-Provider ermitteln — mandantengetrennt über
+ * `service/provider.ts`.
+ *
+ * Vorher stand hier eine eigene Abfrage ohne `organization_id`, die einfach die
+ * erste aktive Zeile nahm. Bei zwei Organisationen mit eigenen Schlüsseln hätte
+ * das die Chunks der einen auf Kosten der anderen eingebettet — und an einen
+ * Anbieter geschickt, den sie nicht gewählt hat.
+ *
+ * Deshalb ist `wikiId` hier überall durchgezogen: das Wiki bestimmt die
+ * Organisation, die Organisation den Anbieter.
+ */
+async function getActiveEmbeddingProvider(
+  wikiId: string,
+): Promise<AufgelösterProvider | null> {
+  return holeProvider("embedding", { wikiId });
 }
 
 // OpenAI-kompatible Embedding-API aufrufen (Einzeltext)
-async function generateEmbedding(text: string): Promise<number[] | null> {
-  const provider = await getActiveEmbeddingProvider();
+async function generateEmbedding(
+  text: string,
+  wikiId: string,
+): Promise<number[] | null> {
+  const provider = await getActiveEmbeddingProvider(wikiId);
   if (!provider) {
     console.warn("[embed] No active embedding provider configured");
     return null;
@@ -46,7 +36,7 @@ async function generateEmbedding(text: string): Promise<number[] | null> {
 }
 
 async function callEmbeddingAPI(
-  provider: typeof modelProviders.$inferSelect,
+  provider: AufgelösterProvider,
   text: string,
 ): Promise<number[] | null> {
   try {
@@ -54,7 +44,7 @@ async function callEmbeddingAPI(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${provider.api_key_encrypted}`,
+        Authorization: `Bearer ${provider.api_key}`,
       },
       body: JSON.stringify({
         model: provider.default_model,
@@ -86,16 +76,25 @@ async function callEmbeddingAPI(
 // OpenAI-kompatible Embedding-API mit mehreren Texten pro Request. Die API akzeptiert
 // `input` als Array und liefert `data` mit `index`-Feld zur Zuordnung. Ergebnis ist ein
 // Array in Eingabereihenfolge; bei Fehler/Timeout des ganzen Requests: alle null.
+/**
+ * Ein Stapel Texte auf einmal.
+ *
+ * `wikiId` dient allein der Kostenzählung und ist optional, damit ältere
+ * Aufrufer greifen. Beim Kanal-Import ist genau dieser Aufruf der häufigste
+ * Kostenposten überhaupt — dreihundert Videos ergeben Zehntausende Chunks —,
+ * er ist also der wichtigste, der nicht ungezählt bleiben darf.
+ */
 async function callEmbeddingAPIBatch(
-  provider: typeof modelProviders.$inferSelect,
+  provider: AufgelösterProvider,
   texts: string[],
+  wikiId?: string,
 ): Promise<(number[] | null)[]> {
   try {
     const response = await fetch(`${provider.api_base_url}/embeddings`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${provider.api_key_encrypted}`,
+        Authorization: `Bearer ${provider.api_key}`,
       },
       body: JSON.stringify({
         model: provider.default_model,
@@ -113,6 +112,21 @@ async function callEmbeddingAPIBatch(
     }
 
     const data = await response.json();
+
+    // Embedding-APIs melden nur Eingabetokens; `tokens_out` bleibt 0.
+    if (wikiId) {
+      const t = tokensAus(data);
+      if (t) {
+        await zähleNutzung({
+          kind: USAGE.embedding,
+          wikiId,
+          model: provider.default_model,
+          tokensIn: t.tokensIn || Number(data?.usage?.total_tokens ?? 0),
+          tokensOut: 0,
+        });
+      }
+    }
+
     const items = data?.data;
     if (!Array.isArray(items)) {
       console.warn("[embed] Unexpected batch API response format");
@@ -157,8 +171,8 @@ async function saveChunkEmbedding(chunkId: string, vector: number[]) {
 }
 
 // Embedding für einen einzelnen Chunk generieren und speichern
-export async function embedChunk(chunkId: string, content: string) {
-  const vector = await generateEmbedding(content);
+export async function embedChunk(chunkId: string, content: string, wikiId: string) {
+  const vector = await generateEmbedding(content, wikiId);
   if (!vector) return false;
   return await saveChunkEmbedding(chunkId, vector);
 }
@@ -177,9 +191,9 @@ const EMBED_BATCH_SIZE = parseInt(process.env.EMBED_BATCH_SIZE || "32");
 // und würden vom isNull-Filter sonst ewig erneut geladen. Sie werden in `failed` gemerkt
 // und aus der Abfrage ausgeschlossen.
 export async function embedWorkspaceChunks(wikiId: string) {
-  const provider = await getActiveEmbeddingProvider();
+  const provider = await getActiveEmbeddingProvider(wikiId);
   if (!provider) {
-    console.warn("[embed] No active embedding provider configured");
+    // Der Grund steht schon im Log von holeProvider – hier nur das Ergebnis.
     return { processed: 0, total: 0 };
   }
 
@@ -207,6 +221,7 @@ export async function embedWorkspaceChunks(wikiId: string) {
     const vectors = await callEmbeddingAPIBatch(
       provider,
       unembedded.map((c) => c.content),
+      wikiId,
     );
 
     for (let i = 0; i < unembedded.length; i++) {

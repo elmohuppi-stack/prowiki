@@ -35,6 +35,33 @@ services:
       YOUTUBE_TRANSCRIPT_PROVIDER: ${YOUTUBE_TRANSCRIPT_PROVIDER:-}
       APIFY_API_KEY: ${APIFY_API_KEY:-}
       SUPADATA_API_KEY: ${SUPADATA_API_KEY:-}
+      # Was ein Transkriptabruf kostet, in Millionstel Euro. Hängt am gewählten
+      # Apify-Actor; bei 300 Videos ist der Unterschied zwischen 0,01 € und
+      # 0,05 € der Unterschied zwischen 3 € und 15 € (service/usage.ts).
+      # LLM-Provider werden je Organisation eingetragen ("bring your own key",
+      # service/provider.ts). Steht für eine Organisation keiner bereit, wird
+      # standardmäßig **nicht** auf einen Plattform-Provider ausgewichen: wer
+      # seinen eigenen Anbieter einträgt, weil er nicht in ein Drittland senden
+      # will, darf nicht unbemerkt doch dort landen (docs/DRITTLAND-DEEPSEEK.md).
+      # Auf 1 setzen, sobald es ein Kontingent-Angebot gibt.
+      ALLOW_PLATFORM_PROVIDER: ${ALLOW_PLATFORM_PROVIDER:-0}
+      TRANSCRIPT_COST_MICROS: ${TRANSCRIPT_COST_MICROS:-40000}
+      SPOOL_DIR: /app/spool
+      # Mailversand. Ohne SMTP_HOST landen Verifikations- und Reset-Links im
+      # Log statt in einer Mail (backend/src/service/mail.ts) — das ist der
+      # heutige Zustand und kein Fehler, aber ein vergessenes Passwort ist damit
+      # nur mit SSH-Zugang zurücksetzbar.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+    volumes:
+      # Durchgangsablage für hochgeladene Dateien. Die API schreibt hier hin,
+      # prowiki-worker liest und löscht (backend/src/jobs/spool.ts). Ein Volume
+      # und kein Bind-Mount: der Inhalt ist flüchtig und hat im
+      # Repo-Verzeichnis nichts zu suchen.
+      - prowiki-spool:/app/spool
     restart: unless-stopped
     # /health führt ein `select 1` gegen die Datenbank aus (src/index.ts): ein
     # hängender Prozess, der den Port noch hält, fällt sonst nicht auf.
@@ -51,6 +78,71 @@ services:
     networks:
       # `- default` muss stehen: sobald ein Service networks: deklariert, verliert
       # er das Default-Netz und findet die eigenen Nachbardienste nicht mehr.
+      - default
+      - apps-net
+
+  # Arbeitet die Job-Warteschlange ab: Datei- und URL-Importe, Chunking,
+  # Embedding, Wiki-Generierung, Chat→Wiki. Dasselbe Bild wie prowiki-app, nur
+  # ein anderer Einstiegspunkt.
+  #
+  # Warum getrennt vom API-Container: bis zum 21. August 2026 hingen diese
+  # Arbeiten als `setTimeout` im API-Prozess und **jedes Deployment verlor
+  # sie still** — `deploy.sh` macht ein `up --build`, und ein Import, der
+  # gerade lief, war danach weg; das Dokument blieb auf `processing` stehen,
+  # ohne Fehler, ohne Log. Ausführlich in backend/src/jobs/queue.ts.
+  #
+  # Kein Host-Port, kein apps-net-Alias-Konflikt, kein Healthcheck über HTTP:
+  # der Prozess hört auf nichts. Ob er lebt, sagt der Warteschlangenstand.
+  prowiki-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["bun", "run", "dist/worker.js"]
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:?DB_USER fehlt in .env}:${DB_PASSWORD:?DB_PASSWORD fehlt in .env}@pg-shared:5432/${DB_NAME:-prowiki}
+      NODE_ENV: production
+      # Eigener Prozess, eigener Pool. Kleiner als der der API: der Worker hat
+      # keine gleichzeitigen Requests zu bedienen, sondern höchstens die
+      # `localConcurrency` seiner Warteschlangen (jobs/queue.ts). Zusammen mit
+      # der API bleibt prowiki so bei rund 14 Verbindungen von den 100, die
+      # sich alle Apps auf pg-shared teilen (platform/ARCHITEKTUR.md 4.2).
+      DB_POOL_MAX: ${WORKER_DB_POOL_MAX:-4}
+      JOBS_POOL_MAX: ${JOBS_POOL_MAX:-2}
+      PARSER_URL: http://prowiki-parser:8000/parse
+      SPOOL_DIR: /app/spool
+      YOUTUBE_TRANSCRIPT_PROVIDER: ${YOUTUBE_TRANSCRIPT_PROVIDER:-}
+      APIFY_API_KEY: ${APIFY_API_KEY:-}
+      SUPADATA_API_KEY: ${SUPADATA_API_KEY:-}
+      # LLM-Provider werden je Organisation eingetragen ("bring your own key",
+      # service/provider.ts). Steht für eine Organisation keiner bereit, wird
+      # standardmäßig **nicht** auf einen Plattform-Provider ausgewichen: wer
+      # seinen eigenen Anbieter einträgt, weil er nicht in ein Drittland senden
+      # will, darf nicht unbemerkt doch dort landen (docs/DRITTLAND-DEEPSEEK.md).
+      # Auf 1 setzen, sobald es ein Kontingent-Angebot gibt.
+      ALLOW_PLATFORM_PROVIDER: ${ALLOW_PLATFORM_PROVIDER:-0}
+      TRANSCRIPT_COST_MICROS: ${TRANSCRIPT_COST_MICROS:-40000}
+      # Hier ausdrücklich **nicht** auf 0: im Normalbetrieb kommt ein Import
+      # nach dem anderen, und der Embedding-Job hat einen singletonKey je Wiki.
+      # Der Grund für die 0 im tools-Profil sind Massenläufe, nicht der Betrieb.
+      WIKI_EMBED_AFTER_GENERATE: ${WIKI_EMBED_AFTER_GENERATE:-1}
+    volumes:
+      - prowiki-spool:/app/spool
+    depends_on:
+      # Nur der Startreihenfolge wegen: der Worker braucht den Parser für
+      # PDF und DOCX. Läuft er zuerst an, scheitert der erste Import und wird
+      # wiederholt — unnötig, aber nicht schädlich.
+      prowiki-parser:
+        condition: service_started
+    restart: unless-stopped
+    # Dockers Vorgabe sind 10 Sekunden zwischen SIGTERM und SIGKILL. Ein
+    # laufender Import braucht länger, und `stopBoss` wartet bis zu 50 s auf
+    # laufende Jobs (jobs/queue.ts) — die Frist hier muss darüber liegen, sonst
+    # war das anmutige Abschalten Zierde.
+    stop_grace_period: 60s
+    # Wie prowiki-app: der Worker hält die Datei-Bytes im RAM, bevor er sie an
+    # den Parser gibt.
+    mem_limit: 768m
+    networks:
       - default
       - apps-net
 
@@ -87,6 +179,7 @@ services:
       # Bei Massenläufen zwingend: sonst startet jede Wiki-Generierung einen
       # wiki-weiten Embedding-Sweep und hunderte davon überlagern sich.
       WIKI_EMBED_AFTER_GENERATE: "0"
+      ALLOW_PLATFORM_PROVIDER: ${ALLOW_PLATFORM_PROVIDER:-0}
     mem_limit: 512m
     networks:
       - default
@@ -147,6 +240,13 @@ services:
 # Konsolidierung als eigener Stack unter /var/www/pg-shared und bedient fünf Apps.
 # Diesen Service nicht wieder aufnehmen: ein zweiter Postgres auf demselben
 # Datenverzeichnis beschädigt es — lautlos.
+
+volumes:
+  # Nur Durchgangsablage für Uploads zwischen API und Worker, kein Datenspeicher.
+  # Die Dateien werden nach der Verarbeitung gelöscht, Reste nach 24 Stunden
+  # (backend/src/jobs/spool.ts). Ausdrücklich **nicht** im Backup nötig: was
+  # zählt, steht danach in documents.content.
+  prowiki-spool:
 
 networks:
   # Das gemeinsame Netz, in dem pg-shared erreichbar ist. `external: true`, weil

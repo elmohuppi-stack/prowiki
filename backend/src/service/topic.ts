@@ -2,6 +2,7 @@ import { db } from "../db/index.ts";
 import { topics, documentTopics, wikiPages } from "../db/schema.ts";
 import { eq, and, inArray, sql, asc, desc } from "drizzle-orm";
 import { getActiveProvider, callLLMJson } from "./llm.ts";
+import { USAGE } from "./usage.ts";
 
 /** Slug aus einem Label erzeugen (kleinschreibung, Umlaute, nur a-z0-9-). */
 export function slugify(label: string): string {
@@ -185,7 +186,7 @@ export async function suggestTopics(
   const labels = conceptRows.map((r) => r.title).filter(Boolean);
   if (labels.length === 0) return [];
 
-  const provider = await getActiveProvider();
+  const provider = await getActiveProvider({ wikiId });
   if (!provider) throw new Error("Kein aktiver LLM-Provider konfiguriert");
 
   const prompt = `Du bist ein Bibliothekar. Unten stehen Konzept-Begriffe aus einer Wissensdatenbank.
@@ -201,6 +202,7 @@ ${labels.slice(0, 400).join(", ")}`;
   const result = await callLLMJson<{ topics: { label: string; description?: string }[] }>(
     provider,
     prompt,
+    { kind: USAGE.llmTopic, wikiId },
   );
   if (!result?.topics) return [];
   return result.topics
@@ -225,7 +227,7 @@ export async function classifyText(
   const available = await listTopics(wikiId);
   if (available.length === 0) return [];
 
-  const provider = await getActiveProvider();
+  const provider = await getActiveProvider({ wikiId });
   if (!provider) return [];
 
   const topicList = available
@@ -243,7 +245,10 @@ Antworte NUR mit JSON: {"slugs":["slug1","slug2"]}
 Text:
 ${text.slice(0, 4000)}`;
 
-  const result = await callLLMJson<{ slugs: string[] }>(provider, prompt);
+  const result = await callLLMJson<{ slugs: string[] }>(provider, prompt, {
+    kind: USAGE.llmTopic,
+    wikiId,
+  });
   const chosen = new Set((result?.slugs || []).map((s) => s.trim()));
   return available.filter((t) => chosen.has(t.slug)).map((t) => t.id).slice(0, 3);
 }

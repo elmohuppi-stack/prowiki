@@ -4,8 +4,11 @@ import { zValidator } from "@hono/zod-validator";
 import { sessionMiddleware } from "../middleware/auth.ts";
 import { requireWikiCapability } from "../middleware/access.ts";
 import { hybridSearch } from "../service/search.ts";
+import { USAGE, zähleNutzung, tokensAus } from "../service/usage.ts";
+import { LIMITS } from "../middleware/rate-limit.ts";
+import { holeProvider, type AufgelösterProvider } from "../service/provider.ts";
 import { db } from "../db/index.ts";
-import { chatSessions, chatMessages, modelProviders } from "../db/schema.ts";
+import { chatSessions, chatMessages } from "../db/schema.ts";
 import { eq, desc, and } from "drizzle-orm";
 import { streamText, createTextStreamResponse } from "ai";
 import { openai } from "@ai-sdk/openai";
@@ -66,32 +69,22 @@ async function loadHistory(
     .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 }
 
-// Aktiven LLM-Provider laden
-async function getActiveProvider() {
-  let providers = await db
-    .select()
-    .from(modelProviders)
-    .where(
-      and(
-        eq(modelProviders.is_active, true),
-        eq(modelProviders.provider_type, "chat"),
-      ),
-    )
-    .limit(1);
-
-  if (!providers[0]) {
-    providers = await db
-      .select()
-      .from(modelProviders)
-      .where(
-        and(
-          eq(modelProviders.is_active, true),
-          eq(modelProviders.provider_type, "both"),
-        ),
-      )
-      .limit(1);
-  }
-  return providers[0] || null;
+/**
+ * Aktiven LLM-Provider laden — mandantengetrennt über `service/provider.ts`.
+ *
+ * Hier stand bis zum 21. August 2026 eine dritte Kopie derselben Abfrage ohne
+ * `organization_id`. Drei Kopien waren auch der Grund, warum der Fehler so
+ * lange unbemerkt blieb: wer eine davon liest, sieht nichts Auffälliges.
+ *
+ * `wikiId` ist optional, weil ein Chat auch ohne gewähltes Wiki möglich ist.
+ * Dann entscheidet die Organisation des Nutzers — und wenn der in mehreren ist,
+ * gibt es bewusst keine Antwort statt einer geratenen.
+ */
+async function getActiveProvider(kontext: {
+  wikiId?: string | null;
+  userId?: string | null;
+}) {
+  return holeProvider("chat", kontext);
 }
 
 // System-Prompt bauen. Weiches Grounding: der Wiki-Kontext wird bevorzugt
@@ -124,7 +117,7 @@ ${context}`;
 const CHAT_TOP_K = parseInt(process.env.CHAT_TOP_K || "12");
 
 // Nicht-streaming Chat-Nachricht senden (für History-Kompatibilität)
-chatRouter.post("/", zValidator("json", chatSchema), async (c) => {
+chatRouter.post("/", LIMITS.chat, zValidator("json", chatSchema), async (c) => {
   const principal = c.get("principal");
   const { wiki_id, message, session_id } = c.req.valid("json");
   // Ohne wiki_id chattet der User über "Alle Wikis" – dann greift
@@ -161,11 +154,17 @@ chatRouter.post("/", zValidator("json", chatSchema), async (c) => {
     .map((r) => `[${r.document_title}]: ${r.content}`)
     .join("\n\n");
 
-  const provider = await getActiveProvider();
+  const provider = await getActiveProvider({
+    wikiId: wiki_id ?? null,
+    userId: c.get("principal").userId,
+  });
 
   let reply = "";
   if (provider) {
-    reply = await callLLM(provider, message, context, history);
+    reply = await callLLM(provider, message, context, history, {
+      wikiId: wiki_id ?? null,
+      sessionId: session.id,
+    });
   } else {
     reply =
       "Kein Chat-Provider konfiguriert. Bitte im Admin einen Provider anlegen.";
@@ -202,7 +201,7 @@ chatRouter.post("/", zValidator("json", chatSchema), async (c) => {
 });
 
 // Streaming Chat-Endpunkt (SSE)
-chatRouter.post("/stream", zValidator("json", chatSchema), async (c) => {
+chatRouter.post("/stream", LIMITS.chat, zValidator("json", chatSchema), async (c) => {
   const principal = c.get("principal");
   const { wiki_id, message, session_id } = c.req.valid("json");
   if (wiki_id) {
@@ -238,7 +237,10 @@ chatRouter.post("/stream", zValidator("json", chatSchema), async (c) => {
     .map((r) => `[${r.document_title}]: ${r.content}`)
     .join("\n\n");
 
-  const provider = await getActiveProvider();
+  const provider = await getActiveProvider({
+    wikiId: wiki_id ?? null,
+    userId: c.get("principal").userId,
+  });
 
   if (!provider) {
     return c.json({
@@ -261,7 +263,7 @@ chatRouter.post("/stream", zValidator("json", chatSchema), async (c) => {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${provider.api_key_encrypted}`,
+      Authorization: `Bearer ${provider.api_key}`,
     },
     body: JSON.stringify({
       model: provider.default_model,
@@ -434,11 +436,18 @@ chatRouter.delete("/sessions/:id", async (c) => {
   return c.json({ deleted: true });
 });
 
+/**
+ * Chat-Antwort. Eigene Fassung neben service/llm.ts, weil sie Systemprompt und
+ * Verlauf braucht — nicht zusammengelegt, um die Wiederholungslogik dort nicht
+ * mit Chat-Sonderfällen zu belasten.
+ */
 async function callLLM(
-  provider: typeof modelProviders.$inferSelect,
+  provider: AufgelösterProvider,
   message: string,
   context: string,
   history: { role: "user" | "assistant"; content: string }[] = [],
+  /** Für die Kostenzählung. Ohne ihn bliebe der Chat in der Abrechnung leer. */
+  zählung?: { wikiId: string | null; sessionId: string },
 ): Promise<string> {
   const systemPrompt = context
     ? `Du bist ein hilfreicher Assistent mit Zugriff auf eine Wissensdatenbank.
@@ -455,7 +464,7 @@ ${context}`
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${provider.api_key_encrypted}`,
+        Authorization: `Bearer ${provider.api_key}`,
       },
       body: JSON.stringify({
         model: provider.default_model,
@@ -475,6 +484,21 @@ ${context}`
     }
 
     const data = await response.json();
+
+    if (zählung) {
+      const t = tokensAus(data);
+      if (t) {
+        await zähleNutzung({
+          kind: USAGE.llmChat,
+          wikiId: zählung.wikiId,
+          model: provider.default_model,
+          tokensIn: t.tokensIn,
+          tokensOut: t.tokensOut,
+          refId: zählung.sessionId,
+        });
+      }
+    }
+
     return data?.choices?.[0]?.message?.content || "❌ Leere Antwort vom LLM";
   } catch (e: any) {
     return `❌ Fehler bei der LLM-Anfrage: ${e.message}`;

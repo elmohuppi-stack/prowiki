@@ -18,6 +18,7 @@ import { db } from "../db/index.ts";
 import { chatMessages, chatSessions, wikiPages } from "../db/schema.ts";
 import { eq } from "drizzle-orm";
 import { getActiveProvider, callLLM, callLLMJson } from "./llm.ts";
+import { USAGE } from "./usage.ts";
 import { hybridSearch } from "./search.ts";
 import { logActivity, updateLog } from "./activity-log.ts";
 import * as documentService from "./document.ts";
@@ -245,7 +246,7 @@ export async function generateClusterFromChat(opts: {
   });
 
   try {
-    const provider = await getActiveProvider();
+    const provider = await getActiveProvider({ wikiId });
     if (!provider) {
       await updateLog(logId, {
         status: "failed",
@@ -285,6 +286,7 @@ export async function generateClusterFromChat(opts: {
     const plan = await callLLMJson<ClusterPlanJson>(
       provider,
       buildPlanPrompt(transcript, spec, existing, ragContext),
+      { kind: USAGE.llmFromChat, wikiId, refId: clusterId },
     );
     if (!plan || !plan.summary?.title) {
       await updateLog(logId, {
@@ -381,6 +383,7 @@ export async function generateClusterFromChat(opts: {
           ragContext,
           linkMenu: linkMenu.filter((l) => l.slug !== item.slug),
         }),
+        { kind: USAGE.llmFromChat, wikiId, refId: clusterId },
       );
       if (!raw) {
         console.warn(`[chat-wiki] Leere Antwort für "${item.page.title}"`);

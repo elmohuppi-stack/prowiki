@@ -5,17 +5,20 @@
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/index.ts",
-    "build": "bun build src/index.ts --outdir ./dist --target bun",
+    "build": "bun build src/index.ts --outdir ./dist --target bun && bun build src/jobs/worker.ts --outdir ./dist --target bun",
     "start": "bun run src/index.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "bootstrap-org": "bun run src/scripts/bootstrap-org.ts"
+    "bootstrap-org": "bun run src/scripts/bootstrap-org.ts",
+    "worker": "bun run src/jobs/worker.ts",
+    "worker:dev": "bun run --watch src/jobs/worker.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.11",
     "@hono/zod-validator": "^0.4.0",
     "@prowiki/shared": "workspace:*",
+    "@types/nodemailer": "^8.0.1",
     "ai": "^7.0.22",
     "bcryptjs": "^2.4.3",
     "better-auth": "^1.6.25",
@@ -23,6 +26,7 @@
     "drizzle-orm": "^0.40.0",
     "hono": "^4.7.0",
     "jsonwebtoken": "^9.0.0",
+    "nodemailer": "^9.0.5",
     "openai": "^4.0.0",
     "pg": "^8.22.0",
     "pg-boss": "^12.26.4",

@@ -279,6 +279,28 @@ Zu tun:
 
 ---
 
+## 6a. Einmalig beim nächsten Deploy: Provider-Schlüssel verschlüsseln
+
+Seit dem 21. August 2026 verschlüsselt prowiki die API-Schlüssel der LLM-Anbieter
+(`service/crypto.ts`). Der **Bestand** wird davon nicht automatisch erfasst — er
+liegt weiter im Klartext, bis dieser Lauf ihn holt:
+
+```sh
+ssh elmarhepp 'cd /var/www/prowiki && docker compose --profile tools run --rm \
+  prowiki-tools bun run src/scripts/encrypt-provider-keys.ts --dry'
+# sieht gut aus? dann ohne --dry
+```
+
+Idempotent, also gefahrlos wiederholbar. Solange er nicht gelaufen ist, warnt die
+App beim ersten Aufruf einmal im Log („[crypto] Mindestens ein API-Schlüssel liegt
+im Klartext") — das ist der Prüfstein, ob es nötig war.
+
+Voraussetzung: dieselbe `AUTH_SECRET` wie die laufende App. Eine andere macht die
+Schlüssel unlesbar; das Skript bricht deshalb ohne `AUTH_SECRET` ab und liest
+jeden Wert nach dem Schreiben zurück.
+
+---
+
 ## 7. Nach dem Livegang
 
 1. **[platform/DEPLOYMENT.md](../../platform/DEPLOYMENT.md) ergänzen** — Zeile in der
@@ -324,8 +346,15 @@ nicht. Trotzdem gilt die Regel aus DEPLOYMENT.md: **kein `docker compose up` in
   nach einer Phase realer Nutzung erfüllt.
 - **Öffentliche Wikis.** Sichtbarkeit `public` existiert im Schema, aber ohne
   Lese-Seite, ohne SEO, ohne Rate-Limits — das ist Stufe 2.
-- **pg-boss und der Worker-Container.** Im Parallelbetrieb tragen die
-  `setTimeout`-Jobs. Der Vorbehalt bleibt: ein `docker compose up --build` mitten in
-  einem Import verliert ihn stillschweigend.
-- **Mailversand.** Verifikations- und Reset-Links stehen im Log. Für zwei bekannte
-  Nutzer tragbar, vor dem ersten Fremdkunden nicht.
+- ~~**pg-boss und der Worker-Container.**~~ **Erledigt am 21. August 2026.** Die
+  Jobs liegen jetzt in `pgboss.job` in derselben Datenbank, abgearbeitet wird im
+  eigenen Container `prowiki-worker`. Der Vorbehalt oben ist damit eingelöst: ein
+  `docker compose up --build` mitten in einem Import verliert ihn nicht mehr,
+  sondern der nächste Worker holt ihn erneut. Begründung und Zuschnitt der
+  Warteschlangen in `backend/src/jobs/queue.ts`.
+- ~~**Mailversand.**~~ **Gebaut am 21. August 2026**, aber **nicht scharf**:
+  `backend/src/service/mail.ts` verschickt über SMTP, sobald `SMTP_HOST` in der
+  `.env` steht. Solange es fehlt, landen die Links weiter im Log — derselbe
+  Zustand wie vorher, jetzt aber ohne Codeänderung umschaltbar. Der Grund, das
+  nicht liegen zu lassen: ein vergessenes Passwort war ohne SSH-Zugang zum Server
+  nicht zurücksetzbar.

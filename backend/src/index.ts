@@ -14,6 +14,9 @@ import { chatRouter } from "./router/chat.ts";
 import { pageRouter } from "./router/page.ts";
 import { topicRouter } from "./router/topic.ts";
 import { activityRouter } from "./router/activity.ts";
+import { usageRouter } from "./router/usage.ts";
+import { getBoss, stopBoss } from "./jobs/queue.ts";
+import { mailVersandAktiv } from "./service/mail.ts";
 
 const app = new Hono();
 
@@ -81,6 +84,7 @@ app.route("/api/v1/chat", chatRouter);
 app.route("/api/v1/pages", pageRouter);
 app.route("/api/v1/topics", topicRouter);
 app.route("/api/v1/activity", activityRouter);
+app.route("/api/v1/usage", usageRouter);
 
 const port = parseInt(process.env.PORT || "3000");
 
@@ -89,6 +93,46 @@ const port = parseInt(process.env.PORT || "3000");
 const maxUploadMb = parseInt(process.env.MAX_UPLOAD_MB || "512");
 
 console.log(`🚀 prowiki API auf Port ${port} (max Upload ${maxUploadMb} MB)`);
+
+// Beim Start sagen, ob Mails rausgehen. Ohne diese Zeile ist der Unterschied
+// zwischen „Registrierung verschickt eine Mail" und „der Link steht nur im Log"
+// erst dann sichtbar, wenn jemand auf eine Mail wartet, die nie kommt.
+console.log(
+  mailVersandAktiv()
+    ? `📧 Mailversand über ${process.env.SMTP_HOST}`
+    : "📧 Kein SMTP_HOST — Verifikations- und Reset-Links stehen nur im Log",
+);
+
+/**
+ * Warteschlange schon beim Start hochziehen, nicht erst beim ersten Upload.
+ *
+ * `enqueue` würde sie sonst beiläufig starten — und weil der erste Start das
+ * Schema `pgboss` anlegt, hinge daran der erste Upload nach jedem Deployment
+ * mit ein paar Sekunden. Schlimmer: ein Konfigurationsfehler (falsche
+ * DATABASE_URL, fehlende Rechte) fiele erst auf, wenn jemand eine Datei
+ * hochlädt, und äußerte sich dort als Fehler beim Hochladen.
+ *
+ * Bewusst kein `await` vor `Bun.serve`: die API soll auch antworten, wenn die
+ * Warteschlange gerade nicht erreichbar ist. Lesen und Suchen brauchen sie
+ * nicht — nur Importe.
+ */
+getBoss().catch((e) =>
+  console.error(
+    "[jobs] Warteschlange nicht erreichbar – Importe werden scheitern:",
+    e?.message ?? e,
+  ),
+);
+
+// Beim Herunterfahren die pg-boss-Verbindungen ordentlich schließen. Auf
+// `pg-shared` teilen sich alle Apps `max_connections`; liegengebliebene
+// Verbindungen eines beendeten Containers sind dort nicht nur unsauber.
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.on(signal, () => {
+    void stopBoss()
+      .catch(() => {})
+      .then(() => process.exit(0));
+  });
+}
 
 Bun.serve({
   port,

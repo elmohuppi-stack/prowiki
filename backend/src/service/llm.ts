@@ -2,36 +2,40 @@
 // Genutzt von wiki-generate.ts (Artikel-Generierung) und topic.ts
 // (Themen-Vorschläge/Klassifikation). Als eigenes Modul, um Zirkelbezüge
 // zwischen Generator und Topic-Service zu vermeiden.
-import { db } from "../db/index.ts";
-import { modelProviders } from "../db/schema.ts";
-import { and, eq } from "drizzle-orm";
+import {
+  holeProvider,
+  type AufgelösterProvider,
+  type ProviderKontext,
+} from "./provider.ts";
+import { zähleNutzung, tokensAus, type UsageKind } from "./usage.ts";
 
-/** Aktiven Chat-Provider ermitteln (chat, sonst both). */
-export async function getActiveProvider() {
-  let providers = await db
-    .select()
-    .from(modelProviders)
-    .where(
-      and(
-        eq(modelProviders.is_active, true),
-        eq(modelProviders.provider_type, "chat"),
-      ),
-    )
-    .limit(1);
+/**
+ * Wem ein Aufruf zugerechnet wird.
+ *
+ * Optional, damit die vorhandenen Aufrufer weiter greifen — aber ohne ihn kann
+ * kein Posten geschrieben werden, und der Aufruf ist in der Abrechnung
+ * unsichtbar. Neue Aufrufstellen sollten ihn deshalb immer mitgeben.
+ */
+export interface LLMKontext {
+  kind: UsageKind;
+  wikiId?: string | null;
+  organizationId?: string | null;
+  /** Dokument, Sitzung oder Verbund, um den es geht. */
+  refId?: string | null;
+}
 
-  if (!providers[0]) {
-    providers = await db
-      .select()
-      .from(modelProviders)
-      .where(
-        and(
-          eq(modelProviders.is_active, true),
-          eq(modelProviders.provider_type, "both"),
-        ),
-      )
-      .limit(1);
-  }
-  return providers[0] || null;
+/**
+ * Aktiven Chat-Provider ermitteln.
+ *
+ * Nur noch eine Weiterleitung an `service/provider.ts`. Vorher stand hier eine
+ * eigene Abfrage ohne `organization_id` — mit zwei Mandanten hätte sie den
+ * Schlüssel des einen für den anderen benutzt. Die Begründung steht dort.
+ *
+ * Der `kontext` ist Pflicht: ohne ihn ist nicht entscheidbar, wessen Provider
+ * gemeint ist, und ein Vorgabewert wäre genau das Raten, das behoben wurde.
+ */
+export async function getActiveProvider(kontext: ProviderKontext) {
+  return holeProvider("chat", kontext);
 }
 
 /**
@@ -52,8 +56,9 @@ function isRetryable(status: number): boolean {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function callLLM(
-  provider: any,
+  provider: AufgelösterProvider,
   prompt: string,
+  kontext?: LLMKontext,
 ): Promise<string | null> {
   for (let attempt = 1; attempt <= LLM_MAX_ATTEMPTS; attempt++) {
     const last = attempt === LLM_MAX_ATTEMPTS;
@@ -62,7 +67,7 @@ export async function callLLM(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${provider.api_key_encrypted}`,
+          Authorization: `Bearer ${provider.api_key}`,
         },
         body: JSON.stringify({
           model: provider.default_model,
@@ -90,6 +95,26 @@ export async function callLLM(
       }
 
       const data = await response.json();
+
+      // Zählen, sobald die Antwort da ist — vor der Prüfung auf leeren Inhalt.
+      // Eine leere Antwort ist trotzdem bezahlt, und ein Wiederholungsversuch
+      // kostet ein zweites Mal: genau diese Fälle sollen in der Summe stehen,
+      // sonst ist die Zählung immer zu niedrig, wenn es Probleme gab.
+      if (kontext) {
+        const t = tokensAus(data);
+        if (t) {
+          await zähleNutzung({
+            kind: kontext.kind,
+            wikiId: kontext.wikiId,
+            organizationId: kontext.organizationId,
+            model: provider?.default_model ?? null,
+            tokensIn: t.tokensIn,
+            tokensOut: t.tokensOut,
+            refId: kontext.refId,
+          });
+        }
+      }
+
       const content = data?.choices?.[0]?.message?.content || null;
       // Leere Antwort bei HTTP 200 kommt vor (abgeschnittener Stream) und ist
       // ebenfalls ein Wiederholungsgrund.
@@ -118,10 +143,11 @@ export async function callLLM(
 }
 
 export async function callLLMJson<T>(
-  provider: any,
+  provider: AufgelösterProvider,
   prompt: string,
+  kontext?: LLMKontext,
 ): Promise<T | null> {
-  const raw = await callLLM(provider, prompt);
+  const raw = await callLLM(provider, prompt, kontext);
   if (!raw) return null;
   try {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
