@@ -644,17 +644,41 @@ export async function deletePage(wikiId: string, slug: string) {
     )
     .limit(1);
 
-  // Auch eingehende Links bei anderen Seiten entfernen
+  /**
+   * Auch eingehende Links bei anderen Seiten entfernen.
+   *
+   * `in_links` ist **jsonb**, kein Postgres-Array (schema/content.ts:184). Hier
+   * standen bis zum 21. August 2026 `array_remove(in_links, …)` und
+   * `${slug} = ANY(in_links)` — beides Array-Operatoren, die Postgres auf jsonb
+   * mit „op ANY/ALL (array) requires array on right side" abweist.
+   *
+   * Der Fehler lag lange unbemerkt, weil ihn nichts aufrief. Seit dem
+   * 19. August räumt die Wiki-Generierung verwaiste Kapitel auf
+   * (wiki-generate.ts) und damit lief sie in genau diese Zeile: der ganze
+   * Generierungslauf brach dort ab, **bevor** Zitate und Verlinkungen
+   * entstanden. Drei Dokumente vom 19. und 21. August blieben deshalb ohne
+   * Artikel. Betroffen waren außerdem das Löschen einer Wiki-Seite über die
+   * Oberfläche und `deleteSessionDrafts`, also jedes „Regenerieren" eines
+   * Chat-Verbunds.
+   *
+   * Das Umschreiben folgt demselben Muster, das in service/document.ts schon
+   * richtig steht: Elemente auspacken, filtern, wieder einsammeln. `@>` für die
+   * Enthaltensein-Prüfung ist derselbe Operator wie in listPages (Zeile 208).
+   */
   await db
     .update(wikiPages)
     .set({
-      in_links: sql`array_remove(in_links, ${slug})`,
+      in_links: sql`COALESCE((
+        SELECT jsonb_agg(e)
+        FROM jsonb_array_elements_text(${wikiPages.in_links}) AS e
+        WHERE e <> ${slug}
+      ), '[]'::jsonb)`,
       updated_at: new Date(),
     })
     .where(
       and(
         eq(wikiPages.wiki_id, wikiId),
-        sql`${slug} = ANY(in_links)`,
+        sql`${wikiPages.in_links} @> ${JSON.stringify([slug])}::jsonb`,
       ),
     );
 

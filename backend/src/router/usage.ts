@@ -15,7 +15,7 @@ import { sessionMiddleware } from "../middleware/auth.ts";
 import { requireWikiCapability } from "../middleware/access.ts";
 import { db } from "../db/index.ts";
 import { usageEvents, wikis } from "../db/schema.ts";
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, sql } from "drizzle-orm";
 
 const usageRouter = new Hono();
 usageRouter.use("*", sessionMiddleware);
@@ -111,7 +111,13 @@ usageRouter.get("/org/:orgId", async (c) => {
       and(
         eq(usageEvents.organization_id, orgId),
         gte(usageEvents.created_at, seit(c)),
-        sql`${usageEvents.wiki_id} = any(${erlaubt.map((w) => w.id)})`,
+        // `inArray` statt eines `= any(...)` in einem sql-Template: ein
+        // JS-Array in ein sql-Template zu geben ist genau der Fehler, der in
+        // deletePage drei Generierungsläufe gekostet hat.
+        inArray(
+          usageEvents.wiki_id,
+          erlaubt.map((w) => w.id),
+        ),
       ),
     )
     .groupBy(usageEvents.wiki_id, usageEvents.kind);

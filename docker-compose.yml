@@ -100,6 +100,16 @@ services:
     command: ["bun", "run", "dist/worker.js"]
     environment:
       DATABASE_URL: postgresql://${DB_USER:?DB_USER fehlt in .env}:${DB_PASSWORD:?DB_PASSWORD fehlt in .env}@pg-shared:5432/${DB_NAME:-prowiki}
+      # Der Worker macht keine Anmeldung — AUTH_SECRET stand deshalb zuerst
+      # nicht hier, und das war ein Fehler mit sofortiger Wirkung: seit die
+      # API-Schlüssel der LLM-Anbieter verschlüsselt sind (service/crypto.ts),
+      # leitet der Worker daraus den Schlüssel zum **Entschlüsseln** ab. Ohne
+      # ihn scheiterte am 21. August 2026 jede Wiki-Generierung und jedes
+      # Embedding nach 0,0 s mit „AUTH_SECRET fehlt".
+      #
+      # Mit `:?` statt `:-`, damit ein fehlender Wert den Container nicht
+      # starten lässt, statt beim ersten Job aufzufallen.
+      AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET fehlt in .env}
       NODE_ENV: production
       # Eigener Prozess, eigener Pool. Kleiner als der der API: der Worker hat
       # keine gleichzeitigen Requests zu bedienen, sondern höchstens die

@@ -83,6 +83,27 @@ async function arbeite<N extends keyof JobPayloads & string>(
 }
 
 async function main() {
+  /**
+   * Beim Start prüfen, was sonst erst beim ersten Job auffällt.
+   *
+   * Am 21. August 2026 lief der Worker fehlerfrei an und scheiterte dann an
+   * jedem einzelnen Job nach 0,0 s mit „AUTH_SECRET fehlt" — er braucht ihn, um
+   * die verschlüsselten API-Schlüssel der LLM-Anbieter zu lesen
+   * (service/crypto.ts), und im Compose stand er nicht, weil der Worker keine
+   * Anmeldung macht. Ein Prozess, der bereit meldet und nichts kann, ist die
+   * unangenehmste Sorte Fehler: die Warteschlange füllt sich, der Container ist
+   * „Up", und schuld scheint der Anbieter zu sein.
+   */
+  if (!process.env.AUTH_SECRET) {
+    console.error(
+      "[worker] AUTH_SECRET fehlt. Er wird gebraucht, um die API-Schlüssel der\n" +
+        "         LLM-Anbieter zu entschlüsseln (service/crypto.ts) — ohne ihn\n" +
+        "         scheitert jeder Generierungs- und Embedding-Job. Abbruch statt\n" +
+        "         eines Workers, der bereit meldet und nichts kann.",
+    );
+    process.exit(1);
+  }
+
   // Vor dem ersten getBoss(): nur diese Instanz darf die Warteschlange warten.
   setzeRolle("worker");
   const boss = await getBoss();
