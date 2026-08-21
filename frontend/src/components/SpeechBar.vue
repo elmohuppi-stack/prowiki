@@ -105,7 +105,12 @@ watch(
 </script>
 
 <style scoped>
+/* Klebt am oberen Rand des scrollenden Artikelbereichs: beim Mitlesen muss
+   Pause/Stopp erreichbar bleiben, ohne wieder nach oben zu scrollen. */
 .speech-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -115,6 +120,7 @@ watch(
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
   border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 .speech-play {
   display: flex;

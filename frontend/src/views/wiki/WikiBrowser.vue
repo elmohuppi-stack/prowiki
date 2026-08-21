@@ -212,7 +212,7 @@
     </aside>
 
     <!-- Hauptbereich -->
-    <main class="wiki-main">
+    <main class="wiki-main" ref="mainRef">
       <!-- DISCOVERY -->
       <template v-if="!selectedPage">
         <div class="discovery-head">
@@ -621,7 +621,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useAuthStore } from "../../stores/auth";
 import { useWiki } from "../../composables/useWiki";
@@ -688,6 +688,7 @@ const tabs = ref<{ type: string; label: string; total: number }[]>([
 // Reader state
 const selectedPage = ref<any>(null);
 const selectedSlug = ref("");
+const mainRef = ref<HTMLElement | null>(null);
 // Ebene 4: Bearbeiten + Historie
 // Inhaltsverzeichnis standardmäßig zu: bei kurzen Artikeln stört es, bei langen
 // ist es einen Klick entfernt.
@@ -1225,12 +1226,25 @@ function setReferenceFilter(slug: string, label: string) {
 
 // ---- Navigation ----
 
+/**
+ * Beim Artikelwechsel oben anfangen: sonst bleibt der Scrollstand des vorigen
+ * Kapitels stehen und man landet mitten im neuen Text.
+ */
+function scrollReaderToTop() {
+  nextTick(() => {
+    mainRef.value?.scrollTo({ top: 0 });
+    // Auf schmalen Bildschirmen scrollt das Fenster, nicht .wiki-main.
+    window.scrollTo({ top: 0 });
+  });
+}
+
 function selectPage(p: any) {
   selectedPage.value = p;
   selectedSlug.value = p.slug;
   showFacets.value = false;
   editing.value = false;
   showRevisions.value = false;
+  scrollReaderToTop();
   pushSlug(p.slug);
 }
 
@@ -1257,6 +1271,7 @@ async function loadPageBySlug(slug: string) {
       selectedSlug.value = slug;
       editing.value = false;
       showRevisions.value = false;
+      scrollReaderToTop();
     }
   } catch {
     /* ignore */
