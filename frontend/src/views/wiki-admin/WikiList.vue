@@ -135,8 +135,24 @@ async function loadWikis() {
 
 async function createWiki() {
   createError.value = "";
+  /**
+   * Die Organisation muss mit — sie steht nicht in der Sitzung, sondern in der
+   * aktiven Auswahl (`activeOrgId`).
+   *
+   * Sie fehlte hier, und die Folge war ein roher ZodError im Dialog:
+   * „organization_id Required". Das Backend war nie im Zweifel, welche
+   * Organisation gemeint ist — es wollte sie nur genannt bekommen, weil ein
+   * Nutzer in mehreren sein kann und ein Wiki dann in der falschen entstünde.
+   */
+  const orgId = auth.activeOrgId;
+  if (!orgId) {
+    createError.value =
+      "Keine Organisation ausgewählt. Bitte die Seite neu laden und erneut versuchen.";
+    return;
+  }
   try {
     const res = await axios.post("/api/v1/wikis", {
+      organization_id: orgId,
       name: newName.value,
       description: newDesc.value || undefined,
     });
@@ -147,7 +163,11 @@ async function createWiki() {
     // die der gewählten Sortierung entspricht.
     await loadWikis();
   } catch (e: any) {
-    createError.value = e.response?.data?.error || "Fehler beim Erstellen";
+    // Der Validierungsfehler des Backends kommt als Objekt, nicht als Text.
+    // Ohne diese Unterscheidung stand das rohe ZodError-JSON im Dialog.
+    const fehler = e.response?.data?.error;
+    createError.value =
+      typeof fehler === "string" ? fehler : "Fehler beim Erstellen";
   }
 }
 
