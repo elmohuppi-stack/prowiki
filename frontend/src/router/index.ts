@@ -63,6 +63,13 @@ const router = createRouter({
           name: "WikiGraph",
           component: () => import("../views/wiki/GraphView.vue"),
         },
+        {
+          // Kostenübersicht des Wiki: was die Generierung an LLM-Guthaben
+          // verbraucht hat, je Art, Modell und Eingangsdokument.
+          path: "usage",
+          name: "WikiUsage",
+          component: () => import("../views/usage/UsageView.vue"),
+        },
       ],
     },
     // --- Alte Pfade (Redirects) ---

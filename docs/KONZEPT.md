@@ -210,7 +210,7 @@ org_members            org_id, user_id, role, invited_by, joined_at
 org_invitations        org_id, email, role, token, expires_at, accepted_at
 wikis                  org_id, slug, name, visibility, settings…   (ersetzt workspaces)
 wiki_members           wiki_id, user_id, role                       (optionaler Override)
-usage_events           org_id, kind, tokens_in, tokens_out, cost_micros, ref_id, created_at
+usage_events           org_id, kind, tokens_in, tokens_out, tokens_cached, cost_micros, ref_id, created_at
 audit_events           org_id, actor_id, action, target, ip, user_agent, created_at
 api_keys               org_id, name, hash, scopes, last_used_at, expires_at
 ```
@@ -413,7 +413,7 @@ pg-boss + Worker-Container · Rate-Limits · Audit-Log.
 | Code, Better Auth, Hintertür weg, Org/Wiki/Member, Capabilities, Sichtbarkeit | erledigt (Livegang 16. August) |
 | **pg-boss + Worker-Container** | **erledigt** — `backend/src/jobs/`, Container `prowiki-worker`. Durch einen Test belegt: ein Job, der in einem Prozess eingestellt wird, wird nach dessen Ende von einem neuen abgeholt |
 | **Rate-Limits** | **erledigt** — `middleware/rate-limit.ts` auf Import, Transkriptabruf, Chat und Generierung. Ausdrücklich Schutz gegen den eigenen Klick, noch keiner gegen Fremde: der Zähler liegt im Speicher und gehört in die Datenbank, sobald die API mehrfach läuft |
-| **Kostenzählung** (`usage_events`, KONZEPT 4.5) | **erledigt** — Tokens gemessen, Preise geschätzt, `GET /api/v1/usage/…`. Steht nicht in der Zeile oben, gehört aber vor Stufe 1: ohne sie ist der Kanal-Import ein Blindflug durchs Guthaben |
+| **Kostenzählung** (`usage_events`, KONZEPT 4.5) | **erledigt** — Tokens gemessen, Preise geschätzt, `GET /api/v1/usage/…`. Steht nicht in der Zeile oben, gehört aber vor Stufe 1: ohne sie ist der Kanal-Import ein Blindflug durchs Guthaben. **Seit 23. August auch sichtbar**: Reiter „💶 Kosten" je Wiki und Aufwandskasten je Dokument; Preise auf `deepseek-v4-*` samt Prompt-Cache und Stoßzeit umgestellt (die alte Tabelle kannte nur `deepseek-chat` und bewertete jeden Posten mit 0) |
 | **Mandantentrennung der LLM-Provider** | **erledigt am 21. August** — `service/provider.ts`. Vorher nahmen sechs Stellen „die erste aktive Zeile" ohne `organization_id`: mit zwei Mandanten wären Inhalte über den Schlüssel des anderen gelaufen. Dazu sind die Schlüssel jetzt wirklich verschlüsselt (`service/crypto.ts`) — die Spalte hieß `api_key_encrypted` und enthielt Klartext |
 | **Audit-Log** (`audit_events`) | **offen** — die Tabelle steht seit dem Livegang in `schema/tenancy.ts`, es schreibt sie **nichts**. Zu tun: Anmeldung, Rollenwechsel, Freigabe, Löschung. Der einzige verbliebene Punkt aus dieser Zeile |
 

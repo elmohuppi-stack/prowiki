@@ -224,10 +224,17 @@ documentRouter.post(
       user_id: principal.userId!,
     });
 
+    // Die Dokument-ID wird **vor** dem Abruf gezogen, obwohl das Dokument erst
+    // danach entsteht: der Transkriptabruf ist der teuerste Einzelposten des
+    // Imports, und er soll in der Kostenübersicht an derselben Zeile hängen wie
+    // die Generierung. Ohne das stünde er unter der Video-ID und ließe sich
+    // keinem Dokument zuordnen.
+    const docId = crypto.randomUUID();
+
     console.log(`[doc] Rufe YouTube-Info ab (fetchYouTubeInfo)...`);
     // wiki_id mitgeben: der Abruf kostet Apify-Guthaben je Video und wird
     // gezählt (service/usage.ts).
-    const info = await fetchYouTubeInfo(videoId, wiki_id);
+    const info = await fetchYouTubeInfo(videoId, wiki_id, docId);
 
     if (!info) {
       console.log(`[doc] ❌ Konnte keine Video-Informationen abrufen`);
@@ -254,7 +261,7 @@ documentRouter.post(
 
     const meta = buildDocumentMetadata(info);
     const doc = await documentService.createDocument({
-      id: crypto.randomUUID(),
+      id: docId,
       wiki_id,
       title: info.title,
       type: "youtube",
@@ -341,7 +348,7 @@ documentRouter.post("/:id/refresh-metadata", LIMITS.ingest, async (c) => {
     return c.json({ error: "Could not extract video ID from document" }, 400);
   }
 
-  const info = await fetchYouTubeInfo(videoId, doc.wiki_id);
+  const info = await fetchYouTubeInfo(videoId, doc.wiki_id, doc.id);
   if (!info) {
     return c.json({ error: "Could not fetch video information" }, 502);
   }
@@ -397,7 +404,7 @@ documentRouter.post("/:id/refresh-transcript", LIMITS.transcript, async (c) => {
     user_id: c.get("principal").userId!,
   });
 
-  const info = await fetchYouTubeInfo(videoId, doc.wiki_id);
+  const info = await fetchYouTubeInfo(videoId, doc.wiki_id, doc.id);
   if (!info) {
     await updateLog(logId, {
       status: "failed",

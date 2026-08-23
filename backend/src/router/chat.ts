@@ -494,6 +494,7 @@ ${context}`
           model: provider.default_model,
           tokensIn: t.tokensIn,
           tokensOut: t.tokensOut,
+          tokensCached: t.tokensCached,
           refId: zählung.sessionId,
         });
       }

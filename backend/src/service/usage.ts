@@ -48,33 +48,104 @@ export const USAGE = {
 export type UsageKind = (typeof USAGE)[keyof typeof USAGE];
 
 /**
- * Preise in Millionstel Euro je **eine Million** Tokens.
+ * Preisstand, der in `usage_events.price_version` mitgeschrieben wird.
  *
- * Stand 21. August 2026, aus den Listenpreisen der Anbieter, gerundet und in
- * Euro umgerechnet. Sie sind ausdrücklich Schätzwerte:
- *
- * - Der Wechselkurs schwankt; die Anbieter rechnen in Dollar.
- * - DeepSeek berechnet Treffer im Prompt-Cache günstiger. Ob ein Treffer
- *   vorlag, sagt die Antwort nicht verlässlich, also wird hier immer der
- *   teurere Fall angesetzt. Die Zahl ist damit eine **Obergrenze**, was für
- *   eine Kostenkontrolle die richtige Richtung ist.
- * - Ein unbekanntes Modell wird mit 0 bewertet und in der Konsole gemeldet.
- *   Lieber eine Lücke, die auffällt, als eine erfundene Zahl, die nicht
- *   auffällt.
- *
- * Der Abgleich mit der echten Rechnung des Anbieters bleibt Pflicht — diese
- * Tabelle ersetzt ihn nicht, sie macht nur die Größenordnung während eines
- * Laufs sichtbar.
+ * Bei jeder Änderung an `PREISE` mit hochziehen. Ohne diesen Vermerk lässt sich
+ * an einer alten Zeile nicht mehr erkennen, mit welchen Zahlen sie bewertet
+ * wurde — und eine Summe über einen Zeitraum, in dem sich der Preis geändert
+ * hat, wäre nicht mehr erklärbar.
  */
-const PREISE: Record<string, { in: number; out: number }> = {
-  // DeepSeek (Chat und Generierung)
-  "deepseek-chat": { in: 250_000, out: 1_000_000 },
-  "deepseek-reasoner": { in: 500_000, out: 2_000_000 },
-  // OpenAI-Embeddings
-  "text-embedding-3-small": { in: 19_000, out: 0 },
-  "text-embedding-3-large": { in: 122_000, out: 0 },
-  "text-embedding-ada-002": { in: 95_000, out: 0 },
+export const PREIS_VERSION = "2026-08-23";
+
+/**
+ * Umrechnungskurs Dollar → Euro.
+ *
+ * Die Preistabelle steht in **Dollar**, weil die Anbieter so veröffentlichen.
+ * Sie hier umgerechnet zu führen war der Fehler der ersten Fassung: bei jeder
+ * Kursbewegung hätte jemand fünf Zahlen nachrechnen müssen, und ob eine Zahl
+ * eine Preisänderung oder eine Kursänderung abbildete, war ihr nicht mehr
+ * anzusehen. Jetzt ist es eine Stellschraube, die niemand anfassen muss, um die
+ * Preise zu pflegen.
+ */
+const EUR_JE_USD = Number(process.env.EUR_PER_USD ?? 0.92);
+
+interface Preis {
+  /** Dollar je 1 Mio Eingabetokens **ohne** Treffer im Prompt-Cache. */
+  in: number;
+  /** Dollar je 1 Mio Eingabetokens **mit** Treffer im Prompt-Cache. */
+  in_cached: number;
+  /** Dollar je 1 Mio Ausgabetokens. */
+  out: number;
+  /**
+   * DeepSeek rechnet außerhalb seiner Stoßzeiten den halben Preis ab. Bei
+   * anderen Anbietern fehlt das Feld — ein Embedding kostet rund um die Uhr
+   * dasselbe.
+   */
+  offPeakHalb?: boolean;
+}
+
+/**
+ * Listenpreise in **Dollar** je eine Million Tokens.
+ *
+ * Stand 23. August 2026 (api-docs.deepseek.com/quick_start/pricing sowie die
+ * Preisliste von OpenAI). Weiterhin ausdrücklich Schätzwerte — der Abgleich mit
+ * der Rechnung des Anbieters bleibt Pflicht —, aber drei Dinge, die die erste
+ * Fassung falsch machte, sind jetzt richtig:
+ *
+ * - **Die Modellnamen stimmen wieder.** Dort standen `deepseek-chat` und
+ *   `deepseek-reasoner`; abgerechnet wird längst `deepseek-v4-flash` bzw.
+ *   `-pro`. Steht in der Provider-Zeile der neue Name, fand `kostenMicros`
+ *   keinen Preis und schrieb 0 — die Kostenspalte war dann durchgehend leer,
+ *   ohne dass das jemandem auffiel. Die alten Namen bleiben als Alias stehen,
+ *   DeepSeek führt sie weiter.
+ * - **Cache-Treffer sind getrennt.** Sie kosten rund ein Dreißigstel. Der alte
+ *   Kommentar sagte, ein Treffer sei aus der Antwort nicht ablesbar; das gilt
+ *   nicht mehr, DeepSeek liefert `prompt_cache_hit_tokens`. Aus der Obergrenze
+ *   wird damit eine belastbare Zahl — und zwar gerade dort, wo es zählt: bei
+ *   der Wiki-Generierung geht dasselbe Transkript mehrfach an das Modell.
+ * - **pro ist dreimal teurer als flash.** Vorher stand da Faktor zwei. Wer
+ *   wegen der Artikelqualität wechselt, soll den Unterschied sehen.
+ *
+ * Ein unbekanntes Modell wird weiterhin mit 0 bewertet und einmal gemeldet:
+ * lieber eine Lücke, die auffällt, als eine erfundene Zahl, die nicht auffällt.
+ * `unbepreisteModelle()` macht die Lücke auch in der Oberfläche sichtbar.
+ */
+const PREISE: Record<string, Preis> = {
+  // DeepSeek — Preise der Stoßzeit; außerhalb die Hälfte, siehe istStoßzeit().
+  "deepseek-v4-flash": { in: 0.44, in_cached: 0.014, out: 1.32, offPeakHalb: true },
+  "deepseek-v4-flash-vision-exp": {
+    in: 0.44,
+    in_cached: 0.014,
+    out: 1.32,
+    offPeakHalb: true,
+  },
+  "deepseek-v4-pro": { in: 1.32, in_cached: 0.044, out: 3.96, offPeakHalb: true },
+  // Ältere Namen, die DeepSeek als Alias weiterführt.
+  "deepseek-chat": { in: 0.44, in_cached: 0.014, out: 1.32, offPeakHalb: true },
+  "deepseek-reasoner": { in: 1.32, in_cached: 0.044, out: 3.96, offPeakHalb: true },
+  // OpenAI-Embeddings — nur Eingabe, kein Cache, keine Stoßzeit.
+  "text-embedding-3-small": { in: 0.02, in_cached: 0.02, out: 0 },
+  "text-embedding-3-large": { in: 0.13, in_cached: 0.13, out: 0 },
+  "text-embedding-ada-002": { in: 0.1, in_cached: 0.1, out: 0 },
 };
+
+/**
+ * Stoßzeit bei DeepSeek: Mo–Fr 01:00–04:00 und 06:00–10:00 UTC. Sonst kostet
+ * alles die Hälfte.
+ *
+ * Bewusst aus dem **Zeitpunkt des Aufrufs** bestimmt und nicht aus „jetzt":
+ * eine nachträgliche Neuberechnung über `usage_events.created_at` soll
+ * dieselben Zahlen ergeben wie die Zählung von damals.
+ */
+export function istStoßzeit(zeitpunkt: Date): boolean {
+  const tag = zeitpunkt.getUTCDay();
+  if (tag === 0 || tag === 6) return false;
+  const minuten = zeitpunkt.getUTCHours() * 60 + zeitpunkt.getUTCMinutes();
+  return (
+    (minuten >= 1 * 60 && minuten < 4 * 60) ||
+    (minuten >= 6 * 60 && minuten < 10 * 60)
+  );
+}
 
 /**
  * Was ein Transkriptabruf kostet, in Millionstel Euro.
@@ -92,11 +163,24 @@ export const TRANSKRIPT_KOSTEN_MICROS = Number(
 
 const unbekannteModelle = new Set<string>();
 
-/** Kosten in Millionstel Euro. 0 bei unbekanntem Modell. */
+/** Ob für ein Modell ein Preis hinterlegt ist. Für die Oberfläche. */
+export function istBepreist(model: string | null | undefined): boolean {
+  return !!model && model in PREISE;
+}
+
+/**
+ * Kosten in Millionstel Euro. 0 bei unbekanntem Modell.
+ *
+ * `tokensCached` ist eine **Teilmenge** von `tokensIn`, nicht ein Zusatz — so
+ * liefert DeepSeek es auch (`prompt_tokens` enthält die Cache-Treffer bereits).
+ * Ein Aufrufer, der die beiden addierte, käme auf das Doppelte.
+ */
 export function kostenMicros(
   model: string | null | undefined,
   tokensIn: number,
   tokensOut: number,
+  tokensCached = 0,
+  zeitpunkt: Date = new Date(),
 ): number {
   if (!model) return 0;
   const p = PREISE[model];
@@ -110,7 +194,18 @@ export function kostenMicros(
     }
     return 0;
   }
-  return Math.round((tokensIn * p.in + tokensOut * p.out) / 1_000_000);
+
+  // Mehr Cache-Treffer als Eingabetokens kann es nicht geben. Ein Anbieter, der
+  // das doch meldet, soll die Summe nicht ins Negative ziehen.
+  const cached = Math.min(Math.max(0, tokensCached), Math.max(0, tokensIn));
+  const frisch = Math.max(0, tokensIn) - cached;
+
+  const faktor = p.offPeakHalb && !istStoßzeit(zeitpunkt) ? 0.5 : 1;
+  const usdJeMio = frisch * p.in + cached * p.in_cached + tokensOut * p.out;
+
+  // usdJeMio ist „Dollar mal Tokens je Million"; geteilt durch 1e6 sind es
+  // Dollar, mal 1e6 wieder Millionstel — die beiden kürzen sich weg.
+  return Math.round(usdJeMio * faktor * EUR_JE_USD);
 }
 
 /**
@@ -141,6 +236,8 @@ export interface Zählwert {
   model?: string | null;
   tokensIn?: number;
   tokensOut?: number;
+  /** Teilmenge von `tokensIn`, die aus dem Prompt-Cache kam. */
+  tokensCached?: number;
   /** Dokument-, Sitzungs- oder Verbund-ID — womit der Posten zusammenhängt. */
   refId?: string | null;
   /**
@@ -173,6 +270,11 @@ export async function zähleNutzung(w: Zählwert): Promise<void> {
 
     const tokensIn = Math.max(0, Math.round(w.tokensIn ?? 0));
     const tokensOut = Math.max(0, Math.round(w.tokensOut ?? 0));
+    const tokensCached = Math.min(
+      Math.max(0, Math.round(w.tokensCached ?? 0)),
+      tokensIn,
+    );
+    const jetzt = new Date();
 
     await db.insert(usageEvents).values({
       id: crypto.randomUUID(),
@@ -182,11 +284,14 @@ export async function zähleNutzung(w: Zählwert): Promise<void> {
       model: w.model ?? null,
       tokens_in: tokensIn,
       tokens_out: tokensOut,
+      tokens_cached: tokensCached,
       cost_micros:
         w.costMicros !== undefined
           ? Math.max(0, Math.round(w.costMicros))
-          : kostenMicros(w.model, tokensIn, tokensOut),
+          : kostenMicros(w.model, tokensIn, tokensOut, tokensCached, jetzt),
+      price_version: PREIS_VERSION,
       ref_id: w.refId ?? null,
+      created_at: jetzt,
     });
   } catch (e: any) {
     console.warn(`[usage] ${w.kind} nicht gezählt:`, e?.message ?? e);
@@ -200,13 +305,25 @@ export async function zähleNutzung(w: Zählwert): Promise<void> {
  * das Feld: DeepSeek liefert es, manche Gateways lassen es weg. Fehlt es, wird
  * nichts geschätzt — ein aus der Zeichenzahl gerechneter Tokenwert sieht wie
  * eine Messung aus und ist keine.
+ *
+ * `tokensCached` kommt aus `prompt_cache_hit_tokens` (DeepSeek) bzw.
+ * `prompt_tokens_details.cached_tokens` (OpenAI-Format). Beide zählen eine
+ * **Teilmenge** von `prompt_tokens`, keine zusätzlichen Tokens. Fehlt das Feld,
+ * bleibt es 0 — dann ist die Kostenschätzung wieder eine Obergrenze, also in
+ * der Richtung falsch, in der Falschheit ungefährlich ist.
  */
-export function tokensAus(antwort: any): { tokensIn: number; tokensOut: number } | null {
+export function tokensAus(
+  antwort: any,
+): { tokensIn: number; tokensOut: number; tokensCached: number } | null {
   const u = antwort?.usage;
   if (!u) return null;
   const tokensIn = Number(u.prompt_tokens ?? u.input_tokens ?? 0);
   const tokensOut = Number(u.completion_tokens ?? u.output_tokens ?? 0);
   if (!Number.isFinite(tokensIn) || !Number.isFinite(tokensOut)) return null;
   if (tokensIn === 0 && tokensOut === 0) return null;
-  return { tokensIn, tokensOut };
+  const roh = Number(
+    u.prompt_cache_hit_tokens ?? u.prompt_tokens_details?.cached_tokens ?? 0,
+  );
+  const tokensCached = Number.isFinite(roh) ? Math.max(0, roh) : 0;
+  return { tokensIn, tokensOut, tokensCached };
 }

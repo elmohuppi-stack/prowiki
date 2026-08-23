@@ -104,6 +104,72 @@
         </div>
       </div>
 
+      <!-- Aufwand: was dieses Dokument an Guthaben gekostet hat.
+           Steht bewusst zwischen den Metadaten und der Artikelliste — die
+           Kacheln darüber sagen, wie viel Text daraus wurde (Chunks), dieser
+           Kasten sagt, was das gekostet hat, und die Liste darunter, was dabei
+           herauskam. Alle drei Fragen an einer Stelle. -->
+      <div class="aufwand-box" v-if="aufwand && aufwand.posten.length">
+        <div class="aufwand-kopf">
+          <h4>💶 Aufwand</h4>
+          <span class="aufwand-summe">{{ euro(aufwand.summe_micros) }}</span>
+          <span class="aufwand-neben">
+            {{ zahl(gesamtAufrufe) }} Aufrufe ·
+            {{ kurz(gesamtTokens) }} Tokens
+          </span>
+        </div>
+
+        <table class="aufwand-tab">
+          <tbody>
+            <tr v-for="p in aufwand.posten" :key="p.kind + (p.model || '')">
+              <td>
+                <i class="punkt" :style="{ background: farbe(p.kind) }"></i>
+                {{ artLabel(p.kind) }}
+                <span class="aufwand-modell" v-if="p.model">{{ p.model }}</span>
+              </td>
+              <td class="num">{{ zahl(p.events) }}×</td>
+              <td class="num dim">
+                <template v-if="p.tokens_in || p.tokens_out">
+                  {{ kurz(p.tokens_in) }} ein / {{ kurz(p.tokens_out) }} aus
+                </template>
+                <template v-else>–</template>
+              </td>
+              <td class="num">{{ euro(p.cost_micros) }}</td>
+            </tr>
+            <!-- Cache-Zeile nur, wenn es Treffer gab: eine Zeile „0 aus dem
+                 Cache" bei einem Embedding-Posten wäre eine Aussage über
+                 etwas, das es dort gar nicht gibt. -->
+            <tr v-if="gesamtCache > 0" class="aufwand-cache">
+              <td colspan="3">davon aus dem Prompt-Cache (rund 1/30 des Preises)</td>
+              <td class="num">{{ kurz(gesamtCache) }}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p class="aufwand-ertrag">
+          Ergebnis:
+          <strong>{{ aufwand.artikel_gesamt }}</strong> Artikel<template
+            v-if="aufwand.artikel_nach_typ.length"
+          >
+            ({{
+              aufwand.artikel_nach_typ
+                .map((a: any) => a.anzahl + "× " + a.page_type)
+                .join(" · ")
+            }})</template
+          ><template v-if="aufwand.kosten_je_artikel_micros !== null">
+            — {{ euro(aufwand.kosten_je_artikel_micros) }} je Artikel</template
+          >
+        </p>
+
+        <p class="aufwand-fuss" v-if="aufwandUnvollstaendig">
+          ⚠️ Dieses Dokument wurde vor dem
+          {{ formatDate(aufwand.vollstaendig_ab) }} angelegt. Transkriptabruf und
+          Embeddings trugen damals keine Dokument-ID — ihre Kosten fehlen hier
+          und lassen sich nicht nachtragen. Die Summe ist also zu niedrig.
+        </p>
+        <p class="aufwand-fuss">{{ aufwand.hinweis }}</p>
+      </div>
+
       <!-- Wiki-Artikel bewusst VOR dem Transkript.
            Das Transkript ist bei einem langen Video eine Liste aus hunderten
            Zeitmarken-Zeilen; dahinter war dieser Kasten faktisch unerreichbar,
@@ -221,6 +287,7 @@ import { useRouter, useRoute } from "vue-router";
 import { useAuthStore } from "../../stores/auth";
 import { useConfirm } from "../../composables/useConfirm";
 import ConfirmModal from "../../components/ConfirmModal.vue";
+import { euro, kurz, zahl, artLabel, farbe } from "../../utils/kosten";
 import axios from "axios";
 
 const {
@@ -239,6 +306,8 @@ const documentId = route.params.documentId as string;
 
 const doc = ref<any>(null);
 const wikiPages = ref<any[]>([]);
+/** Kosten und Ertrag dieses Dokuments (GET /usage/document/:id). */
+const aufwand = ref<any>(null);
 const generating = ref(false);
 const genResult = ref("");
 const showFullDesc = ref(false);
@@ -400,6 +469,7 @@ onMounted(async () => {
     loadTopics(),
     loadDocTopics(),
     loadSegments(),
+    loadAufwand(),
   ]);
 });
 
@@ -422,6 +492,45 @@ async function loadWikiPages() {
     console.error("Failed to load wiki pages", e);
   }
 }
+
+async function loadAufwand() {
+  try {
+    const r = await axios.get(`/api/v1/usage/document/${documentId}`);
+    aufwand.value = r.data;
+  } catch {
+    // Vor der Kostenzählung importierte Dokumente haben keine Posten – der
+    // Kasten bleibt dann einfach weg. Kein Fehlerfall.
+  }
+}
+
+const gesamtAufrufe = computed(() =>
+  (aufwand.value?.posten || []).reduce((s: number, p: any) => s + p.events, 0),
+);
+const gesamtTokens = computed(() =>
+  (aufwand.value?.posten || []).reduce(
+    (s: number, p: any) => s + p.tokens_in + p.tokens_out,
+    0,
+  ),
+);
+const gesamtCache = computed(() =>
+  (aufwand.value?.posten || []).reduce(
+    (s: number, p: any) => s + (p.tokens_cached || 0),
+    0,
+  ),
+);
+
+/**
+ * Ob die Summe im Kasten Posten verschweigt.
+ *
+ * Nicht am Fehlen einzelner Arten festgemacht, sondern am Anlagedatum: ein
+ * Dokument, das vor der Umstellung importiert wurde, hat seinen Transkript-
+ * und Embedding-Posten unter einer anderen Kennung stehen. Danach angelegte
+ * Dokumente ohne Transkriptposten sind schlicht keine Videos.
+ */
+const aufwandUnvollstaendig = computed(() => {
+  if (!aufwand.value?.vollstaendig_ab || !doc.value?.created_at) return false;
+  return new Date(doc.value.created_at) < new Date(aufwand.value.vollstaendig_ab);
+});
 
 async function generateWiki() {
   // Nur beim *erneuten* Lauf rückfragen: der erste ist der erwartete Schritt
@@ -453,8 +562,9 @@ async function generateWiki() {
     } else {
       genResult.value = "⚠️ Keine Artikel generiert";
     }
-    // Liste neu laden: nach einem erneuten Lauf können Seiten hinzugekommen sein.
-    await loadWikiPages();
+    // Liste und Aufwand neu laden: nach einem erneuten Lauf können Seiten
+    // hinzugekommen sein — und Guthaben ist in jedem Fall geflossen.
+    await Promise.all([loadWikiPages(), loadAufwand()]);
   } catch (e: any) {
     genResult.value = "❌ " + (e.response?.data?.error || e.message);
   } finally {
@@ -863,6 +973,81 @@ function formatDate(dateStr: string) {
 }
 
 /* Transcript */
+/* Aufwand */
+.aufwand-box {
+  margin: 1rem 1.5rem;
+  padding: 0.9rem 1rem;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+.aufwand-kopf {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+}
+.aufwand-kopf h4 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+.aufwand-summe {
+  font-size: 1.15rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.aufwand-neben {
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+}
+.aufwand-tab {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.aufwand-tab td {
+  padding: 0.28rem 0.35rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.aufwand-tab tr:last-child td {
+  border-bottom: none;
+}
+.aufwand-tab .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.aufwand-tab .dim {
+  color: var(--color-text-secondary);
+}
+.aufwand-cache td {
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+}
+.aufwand-modell {
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  margin-left: 0.35rem;
+}
+.punkt {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+  margin-right: 0.35rem;
+}
+.aufwand-ertrag {
+  font-size: 0.82rem;
+  margin: 0.6rem 0 0;
+}
+.aufwand-fuss {
+  font-size: 0.72rem;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin: 0.4rem 0 0;
+}
+
 .transcript-head {
   display: flex;
   align-items: center;

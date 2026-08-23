@@ -41,6 +41,12 @@
         :class="{ active: activeTab === 'graph' }"
         >🕸️ Graph</router-link
       >
+      <router-link
+        :to="`/wikis/${wikiId}/usage`"
+        class="tab"
+        :class="{ active: activeTab === 'usage' }"
+        >💶 Kosten</router-link
+      >
     </div>
 
     <!-- Tab Content via Router-View -->
@@ -79,12 +85,18 @@ const {
 } = useConfirm();
 
 const wikiId = computed(() => route.params.id as string);
+/**
+ * Der aktive Reiter aus dem **ersten Pfadstück hinter der Wiki-ID**.
+ *
+ * Vorher lief das über `path.includes(...)`, und das war falsch: jeder Pfad
+ * dieses Bereichs beginnt mit `/wikis/…` und enthält damit auch „/wiki" — die
+ * Graph-Ansicht markierte deshalb den Wiki-Reiter. Mit einem vierten Reiter
+ * wäre derselbe Fehler noch einmal entstanden.
+ */
 const activeTab = computed(() => {
-  const path = route.path;
-  if (path.includes("/documents")) return "documents";
-  if (path.includes("/wiki")) return "wiki";
-  if (path.includes("/graph")) return "graph";
-  return "documents";
+  const teile = route.path.split("/").filter(Boolean); // wikis / <id> / <tab>
+  const tab = teile[2] || "documents";
+  return tab === "wiki-review" ? "wiki" : tab;
 });
 
 const ws = ref<any>(null);

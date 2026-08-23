@@ -110,6 +110,7 @@ export async function callLLM(
             model: provider?.default_model ?? null,
             tokensIn: t.tokensIn,
             tokensOut: t.tokensOut,
+            tokensCached: t.tokensCached,
             refId: kontext.refId,
           });
         }

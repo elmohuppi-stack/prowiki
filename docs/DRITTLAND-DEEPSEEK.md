@@ -130,7 +130,9 @@ davon nötig.
   auch bei Stufe 4 trägt. Was der Unterschied ausmacht, ist seit dem
   21. August **messbar**: `usage_events` zählt Tokens je Art und Modell
   ([`service/usage.ts`](../backend/src/service/usage.ts),
-  `GET /api/v1/usage/wiki/:wikiId`).
+  `GET /api/v1/usage/wiki/:wikiId`) — und seit dem 23. August auch ablesbar,
+  im Reiter „💶 Kosten" eines Wiki. Wer den Anbieterwechsel gegen den Preis
+  abwägen will, findet die Grundlage dort statt in `psql`.
 
 **Empfehlung für diesen Fall:** den Plattform-Anbieter von Anfang an in der EU
 oder den USA wählen und DeepSeek denjenigen lassen, die ihn selbst eintragen. Der

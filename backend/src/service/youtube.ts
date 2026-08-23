@@ -93,6 +93,14 @@ export async function fetchYouTubeInfo(
    * greifen; ohne ihn bleibt der Abruf ungezählt.
    */
   wikiId?: string,
+  /**
+   * Das Dokument, zu dem der Abruf gehört. Vorher stand hier die Video-ID —
+   * damit ließ sich der Posten zwar einem Video zuordnen, aber nicht der
+   * Dokumentzeile in der Kostenübersicht, die über `documents.id` geht. Beim
+   * Erstimport gibt es das Dokument noch nicht; der Aufrufer erzeugt die ID
+   * deshalb vorher und legt sie danach mit dieser ID an.
+   */
+  documentId?: string,
 ): Promise<YouTubeInfo | null> {
   const provider = getProvider();
 
@@ -115,7 +123,7 @@ export async function fetchYouTubeInfo(
       wikiId,
       model: provider.name,
       costMicros: TRANSKRIPT_KOSTEN_MICROS,
-      refId: videoId,
+      refId: documentId ?? videoId,
     });
   }
 

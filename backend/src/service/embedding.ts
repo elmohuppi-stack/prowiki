@@ -88,6 +88,13 @@ async function callEmbeddingAPIBatch(
   provider: AufgelösterProvider,
   texts: string[],
   wikiId?: string,
+  /**
+   * Das Dokument, dessen Chunks in diesem Stapel stecken. Damit landet der
+   * Posten in der Kostenübersicht bei genau der Dokumentzeile, zu der er
+   * gehört. Voraussetzung dafür ist, dass ein Stapel nur Chunks **eines**
+   * Dokuments enthält — dafür sorgt embedWorkspaceChunks.
+   */
+  documentId?: string,
 ): Promise<(number[] | null)[]> {
   try {
     const response = await fetch(`${provider.api_base_url}/embeddings`, {
@@ -123,6 +130,7 @@ async function callEmbeddingAPIBatch(
           model: provider.default_model,
           tokensIn: t.tokensIn || Number(data?.usage?.total_tokens ?? 0),
           tokensOut: 0,
+          refId: documentId ?? null,
         });
       }
     }
@@ -211,27 +219,55 @@ export async function embedWorkspaceChunks(wikiId: string) {
     }
 
     const unembedded = await db
-      .select({ id: chunks.id, content: chunks.content })
+      .select({
+        id: chunks.id,
+        content: chunks.content,
+        document_id: chunks.document_id,
+      })
       .from(chunks)
       .where(and(...conditions))
+      // Nach Dokument sortiert, damit ein Stapel möglichst wenige Dokumente
+      // umfasst — siehe die Gruppierung darunter.
+      .orderBy(chunks.document_id, chunks.chunk_index)
       .limit(EMBED_BATCH_SIZE);
 
     if (unembedded.length === 0) break;
 
-    const vectors = await callEmbeddingAPIBatch(
-      provider,
-      unembedded.map((c) => c.content),
-      wikiId,
-    );
+    // Ein API-Aufruf je Dokument statt einem je Stapel.
+    //
+    // Die Antwort nennt nur eine Tokenzahl für den ganzen Aufruf. Enthielte er
+    // Chunks aus drei Dokumenten, ließen sich die Kosten nur noch schätzweise
+    // aufteilen — und eine geschätzte Zahl, die neben gemessenen steht, ist
+    // genau die Sorte Zahl, die diese Zählung vermeiden soll. Durch die
+    // Sortierung oben sind die meisten Stapel ohnehin einheitlich; der Preis
+    // sind gelegentlich zwei kleine Aufrufe statt eines großen.
+    const gruppen = new Map<string, typeof unembedded>();
+    for (const c of unembedded) {
+      const schlüssel = c.document_id ?? "";
+      const g = gruppen.get(schlüssel);
+      if (g) g.push(c);
+      else gruppen.set(schlüssel, [c]);
+    }
 
-    for (let i = 0; i < unembedded.length; i++) {
-      const chunk = unembedded[i];
-      total++;
-      const vector = vectors[i];
-      if (vector && (await saveChunkEmbedding(chunk.id, vector))) {
-        processed++;
-      } else {
-        failed.add(chunk.id);
+    for (const [docId, gruppe] of gruppen) {
+      const vectors = await callEmbeddingAPIBatch(
+        provider,
+        gruppe.map((c) => c.content),
+        wikiId,
+        // Chunks der Wiki-Seiten selbst tragen ein "wiki--<uuid>" statt einer
+        // Dokument-ID; die gehört zu keinem Eingangsdokument und bleibt leer.
+        docId && !docId.startsWith("wiki--") ? docId : undefined,
+      );
+
+      for (let i = 0; i < gruppe.length; i++) {
+        const chunk = gruppe[i];
+        total++;
+        const vector = vectors[i];
+        if (vector && (await saveChunkEmbedding(chunk.id, vector))) {
+          processed++;
+        } else {
+          failed.add(chunk.id);
+        }
       }
     }
 

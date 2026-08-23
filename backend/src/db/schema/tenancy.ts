@@ -205,15 +205,28 @@ export const usageEvents = pgTable(
     model: varchar("model", { length: 255 }),
     tokens_in: integer("tokens_in").default(0).notNull(),
     tokens_out: integer("tokens_out").default(0).notNull(),
+    // Teilmenge von tokens_in: Eingabetokens, die der Anbieter aus seinem
+    // Prompt-Cache bedient hat. Bei DeepSeek kosten sie rund ein Dreißigstel —
+    // wer sie nicht getrennt führt, rechnet die Wiki-Generierung um ein
+    // Vielfaches zu teuer, weil dort dasselbe Transkript mehrfach hingeht.
+    tokens_cached: integer("tokens_cached").default(0).notNull(),
     // Millionstel Euro als Ganzzahl — Gleitkomma für Geld führt beim Aufsummieren
     // über Zehntausende Zeilen zu Rundungsdrift.
     cost_micros: bigint("cost_micros", { mode: "number" }).default(0).notNull(),
+    // Stand der Preistabelle, mit der cost_micros gerechnet wurde. Ohne das
+    // ist nach einer Preisänderung nicht mehr feststellbar, welche Zahlen in
+    // einer alten Zeile stecken.
+    price_version: varchar("price_version", { length: 20 }),
     ref_id: varchar("ref_id", { length: 64 }),
     created_at: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
     index("usage_events_org_time_idx").on(t.organization_id, t.created_at),
     index("usage_events_kind_idx").on(t.kind),
+    // Kosten je Eingangsdokument gehen über ref_id, die Wiki-Übersicht über
+    // (wiki_id, created_at) — beides ohne Index ein Vollscan auf pg-shared.
+    index("usage_events_ref_idx").on(t.ref_id),
+    index("usage_events_wiki_time_idx").on(t.wiki_id, t.created_at),
   ],
 );
 
