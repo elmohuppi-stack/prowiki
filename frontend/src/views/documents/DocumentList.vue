@@ -34,6 +34,7 @@
         accept=".pdf,.docx,.md,.txt,.html,.csv"
         class="file-input"
       />
+      <ModelChoice :providers="providers" v-model="chosenProvider" />
       <p v-if="uploading">📤 Lädt hoch...</p>
       <p v-if="uploadError" class="error">{{ uploadError }}</p>
       <button
@@ -48,6 +49,7 @@
     <!-- URL Import -->
     <div v-if="showUrl" class="upload-area">
       <input v-model="urlInput" placeholder="https://..." class="url-input" />
+      <ModelChoice :providers="providers" v-model="chosenProvider" />
       <button
         class="btn-primary"
         @click="importUrl"
@@ -66,6 +68,7 @@
         placeholder="https://youtube.com/watch?v=..."
         class="url-input"
       />
+      <ModelChoice :providers="providers" v-model="chosenProvider" />
       <button
         class="btn-primary"
         @click="importYoutube"
@@ -543,6 +546,7 @@ import { useWiki } from "../../composables/useWiki";
 import { useConfirm } from "../../composables/useConfirm";
 import ConfirmModal from "../../components/ConfirmModal.vue";
 import WikiSelect from "../../components/WikiSelect.vue";
+import ModelChoice from "../../components/ModelChoice.vue";
 import DatePicker from "primevue/datepicker";
 import axios from "axios";
 
@@ -576,6 +580,31 @@ const youtubeError = ref("");
 const youtubeInfo = ref("");
 const urlInput = ref("");
 const youtubeUrl = ref("");
+
+/**
+ * Womit die Wiki-Artikel dieses Imports erzeugt werden.
+ *
+ * Leer heißt „Standard": dann entscheidet das Backend wie bisher
+ * (service/provider.ts). Deshalb ist die Vorbelegung bewusst leer und nicht
+ * der erste Eintrag — sonst würde eine Auswahl mitgeschickt, die der Nutzer nie
+ * getroffen hat, und eine spätere Änderung des Standard-Anbieters ginge an
+ * diesem Import vorbei.
+ */
+const providers = ref<
+  Array<{ id: string; name: string; default_model: string }>
+>([]);
+const chosenProvider = ref("");
+
+async function loadProviders() {
+  try {
+    const res = await axios.get(`/api/v1/documents/${wikiId.value}/providers`);
+    providers.value = res.data.providers || [];
+  } catch {
+    // Kein Grund, den Import zu blockieren: ohne Liste wird eben ohne Auswahl
+    // importiert, und das Backend nimmt den üblichen Anbieter.
+    providers.value = [];
+  }
+}
 
 // Filter & Sortierung (Ebene 2)
 const TYPES = ["youtube", "url", "pdf", "docx", "html", "md", "txt", "chat"];
@@ -894,6 +923,7 @@ onMounted(async () => {
     loadWiki(),
     loadChannels(),
     loadTopics(),
+    loadProviders(),
   ]);
   startActivityPoll();
 });
@@ -1110,6 +1140,7 @@ async function uploadFile(e: Event) {
   try {
     const form = new FormData();
     form.append("file", file);
+    if (chosenProvider.value) form.append("provider_id", chosenProvider.value);
     await axios.post(`/api/v1/documents/upload/${wikiId.value}`, form, {
       headers: { "Content-Type": "multipart/form-data" },
     });
@@ -1130,6 +1161,7 @@ async function importUrl() {
     await axios.post("/api/v1/documents/import-url", {
       wiki_id: wikiId.value,
       url: urlInput.value,
+      provider_id: chosenProvider.value || undefined,
     });
     showUrl.value = false;
     urlInput.value = "";
@@ -1150,6 +1182,7 @@ async function importYoutube() {
     const res = await axios.post("/api/v1/documents/import-youtube", {
       wiki_id: wikiId.value,
       url: youtubeUrl.value,
+      provider_id: chosenProvider.value || undefined,
     });
     youtubeInfo.value = `✅ ${res.data.document.title}`;
     if (res.data.wiki_page) {

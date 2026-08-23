@@ -28,6 +28,8 @@
  *
  * ## Die Regel jetzt
  *
+ * 0. Ein beim Import **ausdrücklich gewählter** Provider — aber nur, wenn er
+ *    dieser Organisation gehört (`providerId` unten).
  * 1. Ein aktiver Provider **dieser Organisation** mit passendem Typ.
  * 2. Sonst einer dieser Organisation mit Typ `both`.
  * 3. Sonst ein **Plattform-Provider** (`organization_id IS NULL`) — aber nur,
@@ -109,6 +111,17 @@ export interface ProviderKontext {
   organizationId?: string | null;
   wikiId?: string | null;
   userId?: string | null;
+  /**
+   * Ausdrücklich gewählter Anbieter (Auswahl beim Import).
+   *
+   * Er wird **nur** genommen, wenn er derselben Organisation gehört, aktiv ist
+   * und zum Zweck passt. Sonst gilt wieder die Regel unten — mit einer Zeile im
+   * Log. Ein Import soll nicht daran scheitern, dass der gewählte Anbieter
+   * zwischen Einstellen und Abarbeiten des Jobs gelöscht wurde; die Auswahl ist
+   * ein Wunsch, keine Zusicherung. Was sie nicht kann: über die Organisation
+   * hinausgreifen — die Prüfung darauf steht in `holeProviderNachId`.
+   */
+  providerId?: string | null;
 }
 
 /**
@@ -138,6 +151,16 @@ export async function holeProvider(
   // sortiert — "chat" < "embedding" wäre alphabetisch zufällig, also über einen
   // ausdrücklichen Rang.
   const rang = (t: string) => (t === kind ? 0 : 1);
+
+  if (kontext.providerId) {
+    const gewünscht = await holeProviderNachId(kontext.providerId, orgId, kind);
+    if (gewünscht) return gewünscht;
+    console.warn(
+      `[provider] ${kind}: gewählter Anbieter ${kontext.providerId} ist für ` +
+        `Organisation ${orgId} nicht verwendbar (gelöscht, inaktiv oder falscher Typ) ` +
+        `– es gilt wieder die übliche Auswahl`,
+    );
+  }
 
   const eigene = await db
     .select()
@@ -206,4 +229,78 @@ function aufbereiten(
     default_model: row.default_model,
     herkunft,
   };
+}
+
+/**
+ * Ein bestimmter Anbieter — aber nur, wenn er wirklich dieser Organisation
+ * gehört.
+ *
+ * Der `organization_id`-Vergleich ist der ganze Zweck der Funktion: die ID
+ * kommt aus einer Job-Nutzlast, die ihrerseits aus einem Request kommt. Ohne
+ * ihn genügte eine erratene UUID, um mit dem Schlüssel einer fremden
+ * Organisation zu erzeugen — genau der Fehler, den der Kopf dieser Datei
+ * beschreibt, nur über einen anderen Weg hereingetragen.
+ */
+export async function holeProviderNachId(
+  id: string,
+  organizationId: string,
+  kind: ProviderKind,
+): Promise<AufgelösterProvider | null> {
+  const [row] = await db
+    .select()
+    .from(modelProviders)
+    .where(
+      and(
+        eq(modelProviders.id, id),
+        eq(modelProviders.organization_id, organizationId),
+        eq(modelProviders.is_active, true),
+        inArray(modelProviders.provider_type, [kind, "both"]),
+      ),
+    )
+    .limit(1);
+  return row ? aufbereiten(row, "organisation") : null;
+}
+
+/**
+ * Die wählbaren Anbieter eines Wiki — ohne Schlüssel, ohne Vorschau darauf.
+ *
+ * Für die Auswahl beim Import. Sie hängt an `wiki.write` und nicht an
+ * `settings.manage`: wer importieren darf, muss sehen können, womit erzeugt
+ * wird — aber deshalb noch lange nichts über die Schlüssel erfahren. Deshalb
+ * gibt diese Funktion nur Name und Modell zurück und nicht die Zeilen aus
+ * `service/model.ts`, die eine Schlüsselvorschau tragen.
+ */
+export async function wählbareProvider(
+  wikiId: string,
+  kind: ProviderKind = "chat",
+): Promise<
+  Array<{ id: string; name: string; default_model: string; provider_type: string }>
+> {
+  const orgId = await organisationFürWiki(wikiId);
+  if (!orgId) return [];
+  const rows = await db
+    .select({
+      id: modelProviders.id,
+      name: modelProviders.name,
+      default_model: modelProviders.default_model,
+      provider_type: modelProviders.provider_type,
+      created_at: modelProviders.created_at,
+    })
+    .from(modelProviders)
+    .where(
+      and(
+        eq(modelProviders.organization_id, orgId),
+        eq(modelProviders.is_active, true),
+        inArray(modelProviders.provider_type, [kind, "both"]),
+      ),
+    )
+    .orderBy(asc(modelProviders.created_at), asc(modelProviders.id));
+
+  // Dieselbe Reihenfolge wie in `holeProvider`: der erste Eintrag der Liste ist
+  // damit der, der ohne Auswahl genommen würde. Stünde die Liste anders herum,
+  // wäre die Vorbelegung „Standard" in der Oberfläche eine Lüge.
+  const rang = (t: string) => (t === kind ? 0 : 1);
+  return [...rows]
+    .sort((a, b) => rang(a.provider_type) - rang(b.provider_type))
+    .map(({ created_at, ...rest }) => rest);
 }

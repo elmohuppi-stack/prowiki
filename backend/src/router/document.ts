@@ -20,6 +20,7 @@ import { QUEUE, enqueue } from "../jobs/queue.ts";
 import { spoolSchreiben } from "../jobs/spool.ts";
 import { LIMITS } from "../middleware/rate-limit.ts";
 import * as topicService from "../service/topic.ts";
+import { wählbareProvider } from "../service/provider.ts";
 
 const documentRouter = new Hono();
 documentRouter.use("*", sessionMiddleware);
@@ -28,6 +29,27 @@ const urlSchema = z.object({
   wiki_id: z.string().uuid(),
   url: z.string().url(),
   title: z.string().optional(),
+  /**
+   * Womit die Wiki-Artikel erzeugt werden sollen. Freiwillig — ohne Angabe
+   * gilt die übliche Auswahl. Geprüft wird die ID nicht hier, sondern erst
+   * beim Auflösen (service/provider.ts): dort steht auch die Prüfung, dass
+   * sie zur Organisation des Wiki gehört, und dort allein gehört sie hin.
+   */
+  provider_id: z.string().uuid().optional(),
+});
+
+/**
+ * Die Modelle, unter denen beim Import gewählt werden kann.
+ *
+ * Hängt an `wiki.write` und nicht an `settings.manage`: importieren darf auch,
+ * wer die Schlüssel nicht verwalten kann — und muss dann trotzdem sehen, womit
+ * erzeugt wird. Herausgegeben werden nur Name und Modellname, keine Schlüssel
+ * und keine Vorschau darauf.
+ */
+documentRouter.get("/:wikiId/providers", async (c) => {
+  const wikiId = c.req.param("wikiId");
+  await requireWikiCapability(c.get("principal"), wikiId, "wiki.write");
+  return c.json({ providers: await wählbareProvider(wikiId, "chat") });
 });
 
 // Distinct-Kanäle eines Wiki (für das Kanal-Filter-Dropdown)
@@ -107,6 +129,12 @@ documentRouter.post("/upload/:wikiId", LIMITS.ingest, async (c) => {
 
   const body = await c.req.parseBody();
   const file = body["file"] as File | undefined;
+  // Multipart kennt keine Typen: alles kommt als Zeichenkette an, ein nicht
+  // gesetztes Feld als undefined oder leer.
+  const providerId =
+    typeof body["provider_id"] === "string" && body["provider_id"].trim()
+      ? (body["provider_id"] as string)
+      : undefined;
 
   if (!file) {
     return c.json({ error: "No file provided" }, 400);
@@ -150,6 +178,7 @@ documentRouter.post("/upload/:wikiId", LIMITS.ingest, async (c) => {
     fileName,
     fileType,
     spoolPath,
+    providerId,
   });
 
   return c.json({ document: doc }, 201);
@@ -162,7 +191,7 @@ documentRouter.post(
   zValidator("json", urlSchema),
   async (c) => {
     const principal = c.get("principal");
-    const { wiki_id, url, title } = c.req.valid("json");
+    const { wiki_id, url, title, provider_id } = c.req.valid("json");
     await requireWikiCapability(principal, wiki_id, "wiki.write");
 
     const doc = await documentService.createDocument({
@@ -181,6 +210,7 @@ documentRouter.post(
       wikiId: wiki_id,
       userId: principal.userId!,
       url,
+      providerId: provider_id,
     });
 
     return c.json({ document: doc }, 201);
@@ -191,6 +221,7 @@ documentRouter.post(
 const youTubeSchema = z.object({
   wiki_id: z.string().uuid(),
   url: z.string(),
+  provider_id: z.string().uuid().optional(),
 });
 
 documentRouter.post(
@@ -199,7 +230,7 @@ documentRouter.post(
   zValidator("json", youTubeSchema),
   async (c) => {
     const principal = c.get("principal");
-    const { wiki_id, url } = c.req.valid("json");
+    const { wiki_id, url, provider_id } = c.req.valid("json");
     await requireWikiCapability(principal, wiki_id, "wiki.write");
 
     const t0 = Date.now();
@@ -319,6 +350,7 @@ documentRouter.post(
       docId: doc.id,
       wikiId: wiki_id,
       userId: principal.userId!,
+      providerId: provider_id,
     });
 
     console.log(

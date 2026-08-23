@@ -152,6 +152,12 @@ function videoUrlFürZeitmarken(doc: {
 export async function generateWikiArticles(
   docId: string,
   wikiId: string,
+  /**
+   * Beim Import gewählter Anbieter. Optional und nur ein Wunsch: gehört er
+   * nicht zur Organisation des Wiki oder ist er inzwischen weg, wird der
+   * übliche genommen (service/provider.ts).
+   */
+  providerId?: string,
 ): Promise<{ summary: any; entities: number; concepts: number } | null> {
   const t0 = Date.now();
   console.log(`[wiki-gen] ========== START ==========`);
@@ -169,8 +175,8 @@ export async function generateWikiArticles(
     return null;
   }
 
-  // 2. Aktiven Chat-Provider laden
-  const provider = await getActiveProvider({ wikiId });
+  // 2. Chat-Provider laden — den gewählten, sonst den aktiven
+  const provider = await getActiveProvider({ wikiId, providerId });
   if (!provider) {
     console.log(`[wiki-gen] ❌ Kein Chat-Provider konfiguriert`);
     return null;

@@ -67,7 +67,8 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="p in providers" :key="p.id">
+            <template v-for="p in providers" :key="p.id">
+            <tr>
               <td>
                 <strong>{{ p.name }}</strong>
                 <div class="sub">{{ p.api_base_url }}</div>
@@ -85,12 +86,34 @@
                 </button>
               </td>
               <td class="right">
+                <button
+                  class="btn-link"
+                  :disabled="rowTestId === p.id"
+                  @click="testRow(p)"
+                >
+                  {{ rowTestId === p.id ? "Teste …" : "Testen" }}
+                </button>
                 <button class="btn-link" @click="openEdit(p)">Bearbeiten</button>
                 <button class="btn-link danger" @click="removeProvider(p)">
                   Löschen
                 </button>
               </td>
             </tr>
+            <!-- Ergebnis unter der geprüften Zeile statt in einer Sammelmeldung
+                 am Seitenende: bei drei Anbietern ist sonst nicht erkennbar,
+                 welcher gemeint war. -->
+            <tr v-if="rowResults[p.id]" class="result-row">
+              <td colspan="6">
+                <span :class="rowResults[p.id].ok ? 'ok-text' : 'bad-text'">
+                  {{
+                    rowResults[p.id].ok
+                      ? `✅ ${rowResults[p.id].modell} · ${rowResults[p.id].dauer_ms} ms · „${rowResults[p.id].antwort}"`
+                      : `❌ ${rowResults[p.id].fehler}`
+                  }}
+                </span>
+              </td>
+            </tr>
+            </template>
           </tbody>
         </table>
         <p v-if="modelError" class="error">{{ modelError }}</p>
@@ -255,7 +278,15 @@
         </div>
         <div class="field">
           <label>API-Basis-URL *</label>
-          <input v-model="form.api_base_url" placeholder="https://api.deepseek.com" />
+          <input v-model="form.api_base_url" placeholder="https://api.deepseek.com/v1" />
+          <!-- Der häufigste Konfigurationsfehler, und einer, der erst Stunden
+               später als „Import ohne Wiki-Artikel" auffällt: an diese URL wird
+               unverändert /chat/completions bzw. /embeddings angehängt. Wer nur
+               die Domain einträgt, bekommt vom Anbieter einen 404. -->
+          <p class="field-hint">
+            Ohne <code>/chat/completions</code> — das hängt prowiki an. Bei
+            OpenRouter also <code>https://openrouter.ai/api/v1</code>.
+          </p>
         </div>
         <div class="field">
           <label>Standardmodell *</label>
@@ -271,9 +302,35 @@
             :placeholder="editId ? 'Leer lassen, um ihn nicht zu ändern' : 'sk-…'"
           />
         </div>
+        <!-- Ergebnis des Verbindungstests. Steht über den Knöpfen, damit es
+             nicht unter dem Dialogrand verschwindet. -->
+        <div
+          v-if="testResult"
+          class="test-result"
+          :class="testResult.ok ? 'ok' : 'bad'"
+        >
+          <strong>{{
+            testResult.ok ? "✅ Verbindung steht" : "❌ Test fehlgeschlagen"
+          }}</strong>
+          <div v-if="testResult.ok" class="sub">
+            {{ testResult.modell }} · {{ testResult.dauer_ms }} ms · Antwort:
+            „{{ testResult.antwort }}"
+          </div>
+          <div v-else class="sub">{{ testResult.fehler }}</div>
+        </div>
+
         <div class="dialog-actions">
           <button class="btn-secondary" @click="showForm = false">
             Abbrechen
+          </button>
+          <!-- Testen, ohne zu speichern: sonst müsste man eine kaputte Zeile
+               erst anlegen, um zu merken, dass sie kaputt ist. -->
+          <button
+            class="btn-secondary"
+            :disabled="!testValid || testing"
+            @click="testProvider"
+          >
+            {{ testing ? "Teste …" : "Testen" }}
           </button>
           <button class="btn-primary" :disabled="!formValid" @click="saveProvider">
             Speichern
@@ -417,6 +474,27 @@ const form = ref({
   api_key: "",
 });
 
+/**
+ * Ergebnis des Verbindungstests — einmal für den Dialog, einmal je Tabellenzeile.
+ *
+ * Getrennt gehalten, weil beide gleichzeitig sichtbar sein können und ein
+ * gemeinsamer Speicher das Ergebnis der einen Stelle an der anderen anzeigen
+ * würde.
+ */
+type TestErgebnis = {
+  ok: boolean;
+  status?: number;
+  dauer_ms: number;
+  modell?: string | null;
+  antwort?: string | null;
+  fehler?: string;
+};
+
+const testing = ref(false);
+const testResult = ref<TestErgebnis | null>(null);
+const rowTestId = ref<string | null>(null);
+const rowResults = ref<Record<string, TestErgebnis>>({});
+
 // Beim Bearbeiten darf der Schlüssel leer bleiben — dann wird er nicht ersetzt.
 const formValid = computed(
   () =>
@@ -425,6 +503,73 @@ const formValid = computed(
     form.value.default_model.trim() &&
     (editId.value || form.value.api_key.trim()),
 );
+
+/**
+ * Zum Testen reicht weniger als zum Speichern: der Name ist dem Anbieter egal.
+ * Ein Schlüssel muss da sein — entweder frisch eingetippt oder gespeichert
+ * (dann trägt `editId` ihn nach).
+ */
+const testValid = computed(
+  () =>
+    form.value.api_base_url.trim() &&
+    form.value.default_model.trim() &&
+    (editId.value || form.value.api_key.trim()),
+);
+
+/**
+ * Anbieter aus dem Dialog anrufen, ohne ihn zu speichern.
+ *
+ * `provider_type: "both"` wird als Chat getestet — für einen echten
+ * Doppeltest müsste man zwei Aufrufe machen und zwei Ergebnisse anzeigen, und
+ * die Fehlerquelle ist in beiden Fällen dieselbe Basis-URL.
+ */
+async function testProvider() {
+  testing.value = true;
+  testResult.value = null;
+  try {
+    const res = await axios.post(`/api/v1/orgs/${orgId.value}/models/test`, {
+      id: editId.value || undefined,
+      provider_type: form.value.provider_type,
+      api_base_url: form.value.api_base_url.trim(),
+      default_model: form.value.default_model.trim(),
+      api_key: form.value.api_key.trim() || undefined,
+    });
+    testResult.value = res.data;
+  } catch (e: any) {
+    testResult.value = {
+      ok: false,
+      dauer_ms: 0,
+      fehler: e.response?.data?.error || e.message,
+    };
+  } finally {
+    testing.value = false;
+  }
+}
+
+/** Dasselbe für eine gespeicherte Zeile — mit dem gespeicherten Schlüssel. */
+async function testRow(p: any) {
+  rowTestId.value = p.id;
+  try {
+    const res = await axios.post(`/api/v1/orgs/${orgId.value}/models/test`, {
+      id: p.id,
+      provider_type: p.provider_type,
+      api_base_url: p.api_base_url,
+      default_model: p.default_model,
+    });
+    rowResults.value = { ...rowResults.value, [p.id]: res.data };
+  } catch (e: any) {
+    rowResults.value = {
+      ...rowResults.value,
+      [p.id]: {
+        ok: false,
+        dauer_ms: 0,
+        fehler: e.response?.data?.error || e.message,
+      },
+    };
+  } finally {
+    rowTestId.value = null;
+  }
+}
 
 onMounted(load);
 // Beim Wechsel der aktiven Organisation neu laden — sonst zeigt die Seite
@@ -446,6 +591,9 @@ async function loadProviders() {
   try {
     const res = await axios.get(`/api/v1/orgs/${orgId.value}/models`);
     providers.value = res.data.providers || [];
+    // Alte Testergebnisse verwerfen: nach einer Änderung sagen sie nichts mehr
+    // über den Zustand aus, den sie zu zeigen scheinen.
+    rowResults.value = {};
   } catch (e: any) {
     modelError.value = e.response?.data?.error || "Anbieter nicht ladbar";
   } finally {
@@ -469,6 +617,7 @@ async function loadMembers() {
 function openCreate() {
   editId.value = null;
   formError.value = "";
+  testResult.value = null;
   form.value = {
     name: "",
     provider_type: "chat",
@@ -482,6 +631,7 @@ function openCreate() {
 function openEdit(p: any) {
   editId.value = p.id;
   formError.value = "";
+  testResult.value = null;
   form.value = {
     name: p.name,
     provider_type: p.provider_type,
@@ -766,6 +916,38 @@ async function removeMember(m: any) {
   background: var(--color-bg);
   color: var(--color-text);
 }
+.test-result {
+  margin-top: 1rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  font-size: 0.875rem;
+}
+.test-result.ok {
+  border-color: #16a34a;
+}
+.test-result.bad {
+  border-color: #dc2626;
+}
+.test-result .sub {
+  margin-top: 0.25rem;
+  word-break: break-word;
+}
+.result-row td {
+  padding-top: 0;
+  font-size: 0.8rem;
+}
+.ok-text {
+  color: #16a34a;
+}
+.bad-text {
+  color: #dc2626;
+}
+.btn-link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .dialog-actions {
   display: flex;
   justify-content: flex-end;

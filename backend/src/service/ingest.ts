@@ -36,6 +36,8 @@ export async function verarbeiteDatei(
   fileName: string,
   fileType: string,
   buffer: ArrayBuffer | Uint8Array,
+  /** Beim Import gewählter Chat-Anbieter; ohne ihn gilt die übliche Auswahl. */
+  providerId?: string,
 ) {
   const t0 = Date.now();
   const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
@@ -102,7 +104,7 @@ export async function verarbeiteDatei(
     });
 
     await enqueue(QUEUE.chunk, { docId, wikiId });
-    await enqueue(QUEUE.wikiGenerate, { docId, wikiId, userId });
+    await enqueue(QUEUE.wikiGenerate, { docId, wikiId, userId, providerId });
   } catch (e: any) {
     console.error(`[doc] Datei-Verarbeitung fehlgeschlagen ${docId}:`, e.message);
     try {
@@ -242,6 +244,7 @@ export async function generiereWikiArtikel(
   docId: string,
   wikiId: string,
   userId: string,
+  providerId?: string,
 ) {
   const t0 = Date.now();
   const logId = await logActivity({
@@ -260,7 +263,7 @@ export async function generiereWikiArtikel(
   try {
     const { generateWikiArticles } = await import("./wiki-generate.ts");
 
-    const result = await generateWikiArticles(docId, wikiId);
+    const result = await generateWikiArticles(docId, wikiId, providerId);
 
     if (result) {
       await updateLog(logId, {
@@ -309,6 +312,7 @@ export async function importiereUrl(
   url: string,
   wikiId: string,
   userId: string,
+  providerId?: string,
 ) {
   const t0 = Date.now();
   const logId = await logActivity({
@@ -383,7 +387,7 @@ export async function importiereUrl(
     });
 
     await enqueue(QUEUE.chunk, { docId, wikiId });
-    await enqueue(QUEUE.wikiGenerate, { docId, wikiId, userId });
+    await enqueue(QUEUE.wikiGenerate, { docId, wikiId, userId, providerId });
   } catch (e: any) {
     console.error(`[doc] URL-Import fehlgeschlagen ${docId}:`, e.message);
     try {

@@ -119,6 +119,7 @@ async function main() {
         d.fileName,
         d.fileType,
         bytes,
+        d.providerId,
       );
     } finally {
       // Auch im Fehlerfall löschen: ein gescheiterter Import wird neu
@@ -129,7 +130,7 @@ async function main() {
   });
 
   await arbeite(boss, QUEUE.urlImport, (d) =>
-    importiereUrl(d.docId, d.url, d.wikiId, d.userId),
+    importiereUrl(d.docId, d.url, d.wikiId, d.userId, d.providerId),
   );
 
   await arbeite(boss, QUEUE.chunk, (d) =>
@@ -141,7 +142,7 @@ async function main() {
   });
 
   await arbeite(boss, QUEUE.wikiGenerate, async (d) => {
-    await generiereWikiArtikel(d.docId, d.wikiId, d.userId);
+    await generiereWikiArtikel(d.docId, d.wikiId, d.userId, d.providerId);
   });
 
   await arbeite(boss, QUEUE.chatCluster, async (d) => {

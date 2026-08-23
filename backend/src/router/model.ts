@@ -13,6 +13,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { requireOrgCapability } from "../middleware/access.ts";
+import { LIMITS } from "../middleware/rate-limit.ts";
 import * as modelService from "../service/model.ts";
 
 const modelRouter = new Hono();
@@ -27,6 +28,20 @@ const createSchema = z.object({
 });
 
 const updateSchema = createSchema.partial();
+
+/**
+ * Der Testaufruf. `api_key` ist freiwillig: beim Bearbeiten bleibt das Feld
+ * leer, wenn der Schlüssel unverändert bleiben soll — dann wird über `id` der
+ * gespeicherte genommen. `id` ist deshalb kein Pfadparameter: getestet wird
+ * auch ein Anbieter, den es noch gar nicht gibt.
+ */
+const testSchema = z.object({
+  id: z.string().uuid().optional(),
+  provider_type: z.enum(["chat", "embedding", "both"]),
+  api_base_url: z.string().min(1).max(512),
+  default_model: z.string().min(1).max(255),
+  api_key: z.string().optional(),
+});
 
 modelRouter.get("/:orgId/models", async (c) => {
   const orgId = c.req.param("orgId");
@@ -61,6 +76,34 @@ modelRouter.put(
     );
     if (!provider) return c.json({ error: "Provider nicht gefunden" }, 404);
     return c.json({ provider });
+  },
+);
+
+/**
+ * Anbieter ausprobieren, ohne ihn zu speichern.
+ *
+ * Bewusst POST auf eine eigene Route und nicht Teil des Speicherns: ein Test,
+ * der nur beim Anlegen liefe, hülfe genau dann nicht, wenn man ihn braucht —
+ * nämlich wenn ein bestehender Anbieter aufgehört hat zu funktionieren.
+ *
+ * Dieselbe Capability wie das Anlegen: der Aufruf benutzt einen Schlüssel der
+ * Organisation und verbraucht ihr Guthaben, wenn auch nur ein paar Token.
+ */
+modelRouter.post(
+  "/:orgId/models/test",
+  // Der Knopf ruft einen fremden Dienst auf und kostet Token. Dasselbe Limit
+  // wie das Erzeugen: zehn Versuche in zehn Minuten reichen zum Einrichten und
+  // machen den Endpunkt nicht zum Weiterleiter für fremde Anfragen.
+  LIMITS.generate,
+  zValidator("json", testSchema),
+  async (c) => {
+    const orgId = c.req.param("orgId");
+    await requireOrgCapability(c.get("principal"), orgId, "settings.manage");
+    const ergebnis = await modelService.testProvider(orgId, c.req.valid("json"));
+    // Immer 200: das Ergebnis *ist* die Antwort. Ein 502 hier würde im Frontend
+    // im selben catch landen wie ein echter Serverfehler, und der Nutzer sähe
+    // „Test fehlgeschlagen" statt der Meldung des Anbieters.
+    return c.json(ergebnis);
   },
 );
 

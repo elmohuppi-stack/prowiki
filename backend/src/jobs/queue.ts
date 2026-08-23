@@ -81,12 +81,15 @@ export interface JobPayloads {
     fileType: string;
     /** Pfad im geteilten Spool-Verzeichnis, siehe jobs/spool.ts. */
     spoolPath: string;
+    /** Beim Import gewählter Chat-Anbieter, siehe service/provider.ts. */
+    providerId?: string;
   };
   [QUEUE.urlImport]: {
     docId: string;
     wikiId: string;
     userId: string;
     url: string;
+    providerId?: string;
   };
   [QUEUE.chunk]: {
     docId: string;
@@ -102,7 +105,19 @@ export interface JobPayloads {
     replace?: boolean;
   };
   [QUEUE.embed]: { wikiId: string };
-  [QUEUE.wikiGenerate]: { docId: string; wikiId: string; userId: string };
+  /**
+   * `providerId` ist die Wahl aus dem Import-Dialog. Sie wandert durch die
+   * Nutzlast und nicht über das Dokument, weil sie zu *diesem Lauf* gehört und
+   * nicht zum Dokument: dasselbe Dokument kann später mit einem anderen Modell
+   * neu erzeugt werden. Fehlt sie oder taugt sie nicht mehr, gilt die übliche
+   * Auswahl (service/provider.ts).
+   */
+  [QUEUE.wikiGenerate]: {
+    docId: string;
+    wikiId: string;
+    userId: string;
+    providerId?: string;
+  };
   [QUEUE.chatCluster]: {
     wikiId: string;
     sessionId: string;

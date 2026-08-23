@@ -320,7 +320,11 @@ pageRouter.post("/:wikiId/generate/:documentId", LIMITS.generate, async (c) => {
   try {
     const { generateWikiArticles } =
       await import("../service/wiki-generate.ts");
-    const result = await generateWikiArticles(documentId, wikiId);
+    // Auch beim erneuten Erzeugen wählbar: das ist der Fall, für den die
+    // Auswahl am meisten taugt — ein Artikel, der mit dem einen Modell dünn
+    // ausfiel, wird mit dem anderen noch einmal versucht.
+    const providerId = c.req.query("provider_id") || undefined;
+    const result = await generateWikiArticles(documentId, wikiId, providerId);
 
     if (!result) {
       return c.json(
