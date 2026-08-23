@@ -166,7 +166,7 @@
             <tr v-for="d in dokumente" :key="d.document_id">
               <td>
                 <router-link
-                  :to="`/wikis/${wikiId}/documents/${d.document_id}`"
+                  :to="`/wikis/${wikiParam}/documents/${d.document_id}`"
                   class="doc-link"
                   >{{ d.title }}</router-link
                 >
@@ -208,6 +208,7 @@
 import { ref, computed, onMounted } from "vue";
 import { useRoute } from "vue-router";
 import axios from "axios";
+import { useWiki } from "../../composables/useWiki";
 import {
   euro,
   kurz,
@@ -218,7 +219,20 @@ import {
 } from "../../utils/kosten";
 
 const route = useRoute();
-const wikiId = computed(() => route.params.id as string);
+const { resolveWiki, isUUID } = useWiki();
+
+/**
+ * Was in der Adresse steht — eine UUID **oder** ein Slug wie „politik". Die
+ * Wiki-Routen erlauben beides, die API kennt nur die UUID. Genau das fehlte
+ * hier zuerst: die Seite gab „Wiki nicht gefunden", sobald man sie über den
+ * lesbaren Pfad öffnete, also praktisch immer.
+ *
+ * Für Verweise auf Dokumente bleibt der Parameter aus der Adresse stehen: wer
+ * über /wikis/politik/… gekommen ist, soll nicht plötzlich eine UUID im
+ * Adressfeld haben.
+ */
+const wikiParam = computed(() => route.params.id as string);
+const wikiUuid = ref("");
 
 const tage = ref(30);
 const lade = ref(true);
@@ -237,8 +251,21 @@ async function laden() {
   lade.value = true;
   fehler.value = "";
   try {
+    if (!wikiUuid.value) {
+      if (isUUID(wikiParam.value)) {
+        wikiUuid.value = wikiParam.value;
+      } else {
+        const aufgelöst = await resolveWiki(wikiParam.value);
+        if (!aufgelöst) {
+          fehler.value = `Wiki „${wikiParam.value}" nicht gefunden`;
+          return;
+        }
+        wikiUuid.value = aufgelöst.id;
+      }
+    }
+
     const r = await axios.get(
-      `/api/v1/usage/wiki/${wikiId.value}/uebersicht`,
+      `/api/v1/usage/wiki/${wikiUuid.value}/uebersicht`,
       { params: { days: tage.value } },
     );
     daten.value = r.data;
