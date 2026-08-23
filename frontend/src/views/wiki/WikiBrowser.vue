@@ -1229,11 +1229,31 @@ function setReferenceFilter(slug: string, label: string) {
 /**
  * Beim Artikelwechsel oben anfangen: sonst bleibt der Scrollstand des vorigen
  * Kapitels stehen und man landet mitten im neuen Text.
+ *
+ * Welches Element scrollt, hängt an der Bildschirmbreite, und beide zu raten
+ * war zu wenig: die erste Fassung setzte `.wiki-main` und `window` zurück.
+ * Auf dem Telefon scrollt keins von beiden. Dort wird `.wiki-layout` zu
+ * `display: block`, `.wiki-main` wächst mit dem Inhalt statt zu scrollen, und
+ * bewegt wird der Kasten darüber — `.hub-content` aus WikiHub. Der blieb
+ * stehen, und man landete im neuen Kapitel wieder ganz unten.
+ *
+ * Statt jetzt drei Elemente aufzuzählen (und beim nächsten Layoutwechsel ein
+ * viertes zu vergessen), wird der wirkliche Scrollcontainer gesucht: der erste
+ * Vorfahr, der überhaupt scrollen kann.
  */
 function scrollReaderToTop() {
   nextTick(() => {
-    mainRef.value?.scrollTo({ top: 0 });
-    // Auf schmalen Bildschirmen scrollt das Fenster, nicht .wiki-main.
+    let el: HTMLElement | null = mainRef.value;
+    while (el) {
+      const overflow = getComputedStyle(el).overflowY;
+      const scrollbar = el.scrollHeight > el.clientHeight + 1;
+      if ((overflow === "auto" || overflow === "scroll") && scrollbar) {
+        el.scrollTo({ top: 0 });
+        return;
+      }
+      el = el.parentElement;
+    }
+    // Kein scrollender Vorfahr: dann scrollt das Fenster selbst.
     window.scrollTo({ top: 0 });
   });
 }
@@ -2758,6 +2778,12 @@ function closeImport() {
   }
   .wiki-main {
     padding: 1rem 1.1rem;
+    /* Hier scrollt nicht .wiki-main, sondern der Kasten darüber: die Spalte
+       wächst mit dem Inhalt. Bliebe `overflow-y: auto` stehen, wäre sie
+       trotzdem der Bezugsrahmen für `position: sticky` — und weil ein Rahmen,
+       der sich nie bewegt, nichts festhalten kann, scrollte die Vorlese-Leiste
+       mit dem Text weg. Mit `visible` klebt sie am wirklichen Scrollbereich. */
+    overflow: visible;
   }
   /* Discovery: Rail (Filter) oben, Grid darunter — beide sichtbar */
   .wiki-layout:not(.reader) .wiki-main {
@@ -2774,6 +2800,16 @@ function closeImport() {
   }
   .reader-body {
     overflow-wrap: anywhere;
+  }
+  /* Seit .wiki-main hier nicht mehr scrollt, fängt es breite Inhalte auch
+     nicht mehr ab. Die beiden Elemente, die breiter als der Bildschirm werden
+     können, bekommen deshalb ihren eigenen waagerechten Scrollbereich — sonst
+     schiebt eine einzige breite Tabelle die ganze Seite zur Seite. */
+  .reader-body :deep(table),
+  .reader-body :deep(pre) {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
   }
   .dialog,
   .dialog-wide {
