@@ -233,7 +233,6 @@ export async function generateWikiArticles(
         inArray(wikiPages.page_type, ["entity", "concept"]),
       ),
     );
-  const existingSlugs = existingTopicPages.map((p) => p.slug);
 
   // Dokument in Kapitel (~CHAPTER_CHARS) zerlegen, damit das GANZE Dokument
   // verarbeitet wird statt bei 32k Zeichen abgeschnitten. Kurze Dokumente ergeben
@@ -672,6 +671,21 @@ export async function generateWikiArticles(
     );
   }
 
+  // Gültige Linkziele für diesen Import: die Seiten, die dieser Lauf anlegt oder
+  // aktualisiert. Bewusst NICHT alle Slugs des Wikis. Diese Liste stand früher in
+  // JEDEM Seiten-Prompt und machte die Kosten eines Imports proportional zur Größe
+  // des Wikis: bei 3.600 Themenseiten rund 35k Tokens pro Seite, mal 30-40 Seiten.
+  // Ab etwa 30.000 Seiten sprengt sie zusätzlich das Kontextfenster – der Anbieter
+  // antwortet dann mit 400, callLLM gibt null zurück und die Seite wird stillschweigend
+  // übersprungen. Für die Linkqualität leistet die volle Liste nichts, was nicht ohnehin
+  // deterministisch passiert: Querverweise setzt injectCrossLinks per Textabgleich,
+  // tote Links entfernt stripDeadLinks gegen das VOLLSTÄNDIGE Slug-Set aus der
+  // Datenbank, und die Zusammenführung mit bestehenden Seiten macht
+  // resolveSlugAgainstExisting – alles drei ohne Tokens.
+  const linkZiele = [...new Set(toProcess.map((c) => c.slug))]
+    .map((c) => `[[${c}]]`)
+    .join("\n");
+
   for (const item of toProcess) {
     const existing = await wikiService.getPage(wikiId, item.slug);
 
@@ -694,12 +708,16 @@ export async function generateWikiArticles(
       newInfo = `**${item.name}**: ${item.description}\n\n${item.details}`;
     }
 
+    // Nur die Einleitung geht ins Modell; die Belegabschnitte früherer Quellen
+    // bleiben unangetastet und werden unten wieder angehängt.
+    const zerlegt = seiteZerlegen(existing?.content || "");
+
     const pagePrompt = buildPagePrompt({
       item,
-      existingContent: existing?.content || "(Neue Seite)",
+      bisheriges: zerlegt.einleitung || "(Neue Seite)",
       newInformation: newInfo,
       language,
-      availableSlugs: existingSlugs,
+      linkZiele,
       docKind,
       sessionLabel: doc.title,
       zeitmarkenRegel: zeitmarken,
@@ -715,10 +733,28 @@ export async function generateWikiArticles(
     const body = raw.replace(/SUMMARY:\s*.+(\r?\n|$)/i, "").trim();
     const pageType = item.slug.startsWith("entity/") ? "entity" : "concept";
 
+    // Antwort (Einleitung + Abschnitt dieser Quelle) mit dem Bestand verbinden.
+    let content = seiteZusammenfügen({
+      modellAusgabe: body,
+      bestand: zerlegt.bestand,
+      quelle: doc.title,
+    });
+    if (content === null) {
+      // Antwort ohne Belege-Marker. Bei einer bereits umgestellten Seite dürfen
+      // die Bestandsabschnitte deswegen nicht verloren gehen, also hier von Hand
+      // wieder anhängen; bei einer Altseite ist die Antwort die ganze Seite.
+      console.warn(
+        `[wiki-gen] ⚠️ ${item.slug}: Antwort ohne "${zerlegt.marker || "Belege"}"-Marker`,
+      );
+      content = zerlegt.marker
+        ? [body, zerlegt.marker, zerlegt.bestand].filter(Boolean).join("\n\n")
+        : body;
+    }
+
     if (existing) {
       await wikiService.updatePage(wikiId, item.slug, {
         title: existing.title,
-        content: body,
+        content,
         summary: sumMatch?.[1]?.trim() || item.description,
         page_type: pageType,
       });
@@ -728,7 +764,7 @@ export async function generateWikiArticles(
         wiki_id: wikiId,
         slug: item.slug,
         title: item.name,
-        content: body,
+        content,
         summary: sumMatch?.[1]?.trim() || item.description,
         page_type: pageType,
         source_document_id: docId,
@@ -1125,10 +1161,21 @@ async function upsertPage(
 
 function buildPagePrompt(opts: {
   item: ExtractedItem;
-  existingContent: string;
+  /**
+   * Einleitung der bestehenden Seite (bzw. bei noch nicht umgestellten Seiten
+   * deren bisheriger Inhalt). Ausdrücklich NICHT die ganze Seite: die früheren
+   * Belegabschnitte bleiben unangetastet und gehen nie wieder durch das Modell.
+   */
+  bisheriges: string;
   newInformation: string;
   language: string;
-  availableSlugs: string[];
+  /**
+   * Fertig gerenderte Liste gültiger Linkziele. Vorgerendert und NICHT je Seite
+   * gefiltert, damit sie innerhalb eines Imports Byte für Byte gleich bleibt –
+   * sonst bricht das gemeinsame Prompt-Präfix und der Cache greift nicht mehr.
+   * Dass eine Seite nicht auf sich selbst verlinkt, regelt der Prompt.
+   */
+  linkZiele: string;
   docKind?: "meeting_protocol" | "default";
   sessionLabel?: string;
   /** Leer, wenn das Quelldokument keine Zeitmarken trägt. */
@@ -1136,41 +1183,32 @@ function buildPagePrompt(opts: {
 }): string {
   const {
     item,
-    existingContent,
+    bisheriges,
     newInformation,
     language,
-    availableSlugs,
+    linkZiele,
     docKind = "default",
     sessionLabel = "",
     zeitmarkenRegel = "",
   } = opts;
   const pageType = item.slug.startsWith("entity/") ? "Entität" : "Konzept";
-  const validLinks = [...new Set(availableSlugs)]
-    .filter((s) => s !== item.slug) // Seite verlinkt nicht auf sich selbst
-    .map((s) => `[[${s}]]`)
-    .join("\n");
 
+  // Reihenfolge der Ersetzungen ist beliebig – die Reihenfolge im Template
+  // nicht: erst alles im Import Konstante, dann das Seitenspezifische.
   return pagePromptFor(docKind)
     .replace(/\{\{timestampRule\}\}/g, zeitmarkenRegel)
+    .replace("{{availableSlugs}}", linkZiele || "Keine")
+    .replace(/\{\{language\}\}/g, language)
+    .replace(/\{\{sessionLabel\}\}/g, sessionLabel)
     .replace(/\{\{pageSlug\}\}/g, item.slug)
     .replace(/\{\{pageTitle\}\}/g, item.name)
     .replace(/\{\{pageType\}\}/g, pageType)
-    .replace(/\{\{sessionLabel\}\}/g, sessionLabel)
     .replace("{{pageAliases}}", (item.aliases || []).join(", "))
-    .replace("{{existingContent}}", existingContent)
-    .replace("{{availableSlugs}}", validLinks || "Keine")
-    .replace(/\{\{language\}\}/g, language)
+    .replace("{{bisheriges}}", bisheriges)
     .replace(
       "{{additionsSection}}",
       `<new_information>\n${newInformation}\n</new_information>`,
-    )
-    .replace("{{retractionsSection}}", "")
-    .replace("{{retractionInstructions}}", "")
-    .replace(
-      "{{additionInstructions}}",
-      `2. KOMPILIERE die Fakten aus <new_information> zu einem vollständigen, gut gegliederten Artikel über ${item.name}. Verarbeite JEDEN [cNNN]-Chunk und behalte die [cNNN]-Zitate bei.\n3. Erhalte bestehende, weiterhin gültige Informationen über ${item.name}.`,
-    )
-    .replace("{{emptyPageInstruction}}", "");
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1251,6 +1289,116 @@ async function mergeChunkRefs(pageId: string, ids: string[]): Promise<void> {
     .update(wikiPages)
     .set({ chunk_refs: merged })
     .where(eq(wikiPages.id, pageId));
+}
+
+// ---------------------------------------------------------------------------
+// Seitenaufbau: fortgeschriebene Einleitung + Belegabschnitt je Quelle
+//
+// Eine Themenseite wird von vielen Dokumenten gespeist. Würde sie bei jedem
+// Update komplett neu geschrieben, wüchse sowohl die Eingabe (die ganze Seite
+// als Kontext) als auch die Ausgabe (die ganze Seite noch einmal) mit der Zahl
+// der Quellen – bis die Ausgabe gegen max_tokens läuft und die Seite bei jedem
+// weiteren Update Inhalt verliert.
+//
+// Stattdessen: das Modell sieht nur die Einleitung und schreibt nur die
+// Einleitung plus GENAU EINEN Abschnitt für die neue Quelle. Alles davor wird
+// hier wörtlich wieder angehängt. Ein Update kostet damit unabhängig davon,
+// ob die Seite drei oder dreihundert Quellen hat.
+// ---------------------------------------------------------------------------
+
+/**
+ * Trennt Einleitung von den Belegabschnitten. Zwei Schreibweisen, weil
+ * Protokollseiten nach Sitzung gliedern und normale Seiten nach Quelle – für
+ * den Code sind beide dasselbe.
+ */
+const BELEG_MARKER_RE = /^## Belege nach (?:Quelle|Sitzung)[ \t]*$/m;
+
+/** Entfernt eine führende "# Titel"-Zeile. */
+function ohneTitelzeile(text: string): string {
+  return text.replace(/^#\s+.*(\r?\n|$)/, "").trim();
+}
+
+/**
+ * Zerlegt den gespeicherten Seiteninhalt in den Teil, den das Modell
+ * fortschreiben darf, und den Teil, der unangetastet bleibt.
+ *
+ * `marker` ist leer, solange die Seite noch nicht umgestellt ist – daran
+ * erkennt der Aufrufer eine Altseite.
+ */
+function seiteZerlegen(content: string): {
+  einleitung: string;
+  bestand: string;
+  marker: string;
+} {
+  const text = (content || "").trim();
+  if (!text) return { einleitung: "", bestand: "", marker: "" };
+
+  const m = text.match(BELEG_MARKER_RE);
+  if (m && m.index !== undefined) {
+    return {
+      einleitung: text.slice(0, m.index).trim(),
+      bestand: text.slice(m.index + m[0].length).trim(),
+      marker: m[0].trim(),
+    };
+  }
+
+  // Seite aus der Zeit vor der Umstellung: ihr Fließtext wird als erster
+  // Belegabschnitt konserviert, damit beim Umstellen nichts verloren geht. Das
+  // Modell sieht ihn einmalig als bisherigen Stand und zieht daraus die
+  // Einleitung; ab dem nächsten Update wächst die Seite dann beschränkt.
+  return {
+    einleitung: text,
+    bestand: `### Früherer Stand\n\n${ohneTitelzeile(text)}`,
+    marker: "",
+  };
+}
+
+/**
+ * Entfernt den Abschnitt einer Quelle aus dem Bestand – nötig, wenn dasselbe
+ * Dokument erneut importiert wird: sein Abschnitt wird ersetzt, nicht verdoppelt.
+ */
+function abschnittEntfernen(bestand: string, quelle: string): string {
+  if (!bestand.trim()) return "";
+  const ziel = quelle.trim();
+  return bestand
+    .split(/^(?=### )/m)
+    .filter((teil) => {
+      const kopf = teil.split("\n", 1)[0];
+      // Text vor der ersten Überschrift bleibt immer stehen.
+      if (!kopf.startsWith("### ")) return true;
+      return kopf.slice(4).trim() !== ziel;
+    })
+    .join("")
+    .trim();
+}
+
+/**
+ * Setzt die Seite aus der Modellantwort (Einleitung + neuer Abschnitt) und dem
+ * unveränderten Bestand zusammen.
+ *
+ * Gibt `null` zurück, wenn die Antwort den Marker nicht enthält – dann muss der
+ * Aufrufer entscheiden, wie er den Bestand rettet.
+ */
+function seiteZusammenfügen(opts: {
+  modellAusgabe: string;
+  bestand: string;
+  quelle: string;
+}): string | null {
+  const { modellAusgabe, bestand, quelle } = opts;
+  const m = modellAusgabe.match(BELEG_MARKER_RE);
+  if (!m || m.index === undefined) return null;
+
+  const einleitung = modellAusgabe.slice(0, m.index).trim();
+  let neuerAbschnitt = modellAusgabe.slice(m.index + m[0].length).trim();
+  // Ohne Überschrift ließe sich der Abschnitt bei einem erneuten Import dieses
+  // Dokuments nicht wiederfinden und würde sich verdoppeln.
+  if (neuerAbschnitt && !neuerAbschnitt.startsWith("### ")) {
+    neuerAbschnitt = `### ${quelle}\n\n${neuerAbschnitt}`;
+  }
+
+  return [einleitung, m[0].trim(), abschnittEntfernen(bestand, quelle), neuerAbschnitt]
+    .filter((teil) => teil.length > 0)
+    .join("\n\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -1347,4 +1495,8 @@ export const __test__ = {
   splitIntoChapters,
   packBySize,
   verwertbareKapitel,
+  seiteZerlegen,
+  seiteZusammenfügen,
+  abschnittEntfernen,
+  buildPagePrompt,
 };

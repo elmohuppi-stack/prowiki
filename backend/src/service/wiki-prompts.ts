@@ -234,71 +234,67 @@ Was ausdrücklich unklar, unentschieden oder auf eine spätere Sitzung verschobe
 Gib die SUMMARY-Zeile aus, dann die FLAGS-Zeile, dann den Markdown-Artikel. Keine anderen Vorbemerkungen.`;
 
 // ---------------------------------------------------------------------------
-// Sitzungsprotokolle: Entity/Concept-Seiten als chronologische Belegliste
+// Entity/Concept-Seiten: Einleitung + Belegabschnitt je Quelle
 //
-// WIKI_PAGE_MODIFY_PROMPT lässt Seiten unbegrenzt wachsen ("Erhalte vorhandene
-// Informationen"), während max_tokens fest bei 8192 liegt. Eine Seite, die in
-// 150 Sitzungen zitiert wird, läuft dagegen und verliert danach bei jedem
-// Update Inhalt. Als datierte Belegliste bleibt sie beschränkt: pro Sitzung ein
-// Eintrag – und beantwortet genau die Frage "was wurde wann dazu gesagt".
+// Bis hierher schrieb der Prompt die Seite bei JEDEM Update komplett neu
+// ("Erhalte vorhandene Informationen") – gegen ein festes max_tokens von 8192.
+// Eine Seite, die in 150 Quellen vorkommt, läuft irgendwann dagegen und
+// verliert danach bei jedem weiteren Update Inhalt. Außerdem wuchs damit die
+// Eingabe jedes Updates mit der Seitengröße.
+//
+// Deshalb schreibt das Modell jetzt nur noch zwei beschränkte Dinge: die kurze
+// Einleitung (die es fortschreibt) und GENAU EINEN Abschnitt für die neue
+// Quelle. Die früheren Abschnitte sieht es gar nicht – sie werden in
+// seiteZusammenfügen() unverändert wieder angehängt. Ein- und Ausgabe eines
+// Updates sind damit unabhängig davon, wie groß die Seite schon ist.
+//
+// Aufbau der Prompts: alles, was innerhalb eines Imports für JEDE Seite gleich
+// ist (Regeln, Zeitmarken, Linkliste, Anweisungen, Quellenname), steht vorne –
+// nur so trifft der Prompt-Cache des Anbieters, der immer das gemeinsame
+// Präfix erkennt. Alles Seitenspezifische steht dahinter. Diese Reihenfolge
+// bitte beim Bearbeiten beibehalten.
+// ---------------------------------------------------------------------------
+
+/** Steht in der Seite über den Belegabschnitten; siehe BELEG_MARKER_RE. */
+const BELEG_REGELN = `- **Alle Fakten verwenden**: Der <new_information>-Block enthält WÖRTLICHE Quell-Chunks, jeder mit einem [cNNN]-Label. Verarbeite JEDEN gelieferten Chunk.
+- **Nah am Original**: Nutze die Formulierungen der Quelle. Du darfst umordnen, entdoppeln und verwandte Sätze verbinden, aber erfinde keine Übergänge und blähe kurze Aussagen nicht mit Floskeln auf.
+- **Nachverfolgbarkeit**: Versieh jede Tatsachenbehauptung, Zahl, Datum oder Beziehung mit dem passenden Inline-Zitat (z.B. [c003]).
+- **Keine Halluzination**: Erfinde nichts, was nicht in den Quell-Chunks steht.
+- **Du schreibst NUR den Abschnitt für die neue Quelle.** Die Abschnitte früherer Quellen bekommst du nicht zu sehen. Rekonstruiere sie NICHT und beziehe dich nicht auf sie – sie bleiben unverändert erhalten und werden maschinell wieder angehängt.`;
+
+// ---------------------------------------------------------------------------
+// Sitzungsprotokolle: chronologische Belegliste
 // ---------------------------------------------------------------------------
 export const WIKI_PROTOCOL_PAGE_PROMPT = `Du pflegst eine Themenseite, die Aussagen aus vielen Sitzungsprotokollen chronologisch sammelt. Du bist Kompilierer, nicht Autor: du ordnest Belege ein, ohne zu deuten.
 
-<page_metadata>
-  <slug>{{pageSlug}}</slug>
-  <title>{{pageTitle}}</title>
-  <type>{{pageType}}</type>
-  <aliases>{{pageAliases}}</aliases>
-</page_metadata>
-
-Diese Seite handelt ausschließlich von **{{pageTitle}}**. Jede Aussage muss DIREKT davon handeln.
-
-<existing_page_content>
-{{existingContent}}
-</existing_page_content>
-
-{{additionsSection}}
-
-{{retractionsSection}}
-
-<valid_wiki_links>
-{{availableSlugs}}
-</valid_wiki_links>
-
-<instructions>
-1. Die ERSTE Zeile deiner Ausgabe MUSS sein: SUMMARY: {Ein Satz, 15-40 Wörter: was {{pageTitle}} ist und welche Rolle es in den Sitzungen spielt.}
-2. Die ZWEITE Zeile MUSS sein: # {{pageTitle}}
-3. Dann ein Einleitungsabsatz von höchstens 4 Sätzen: was {{pageTitle}} ist und worum es in den Sitzungen dazu ging. Diesen Absatz aktualisierst du, statt ihn wachsen zu lassen.
-4. Danach ein Abschnitt "## Belege nach Sitzung" als **chronologische Liste**, älteste Sitzung zuerst. Format je Eintrag:
-
-### {{sessionLabel}}
-- Was in dieser Sitzung dazu gesagt oder entschieden wurde, mit Zuordnung (z.B. "FG36:") und Inline-Zitat [cNNN].
-> "wörtliches Zitat, wenn eine Bewertung oder Position ausgesprochen wurde"
-
-**Pro Sitzung höchstens 5 Punkte und ein Zitat.** Das ist die entscheidende Regel: die Seite wächst in die Länge, nicht in die Tiefe – nur so bleibt sie auch nach 100 Sitzungen lesbar und vollständig.
-5. **Bestehende Sitzungs-Einträge unverändert übernehmen.** Du ergänzt nur den Eintrag für die neue Sitzung an der chronologisch richtigen Stelle. Schreibe alte Einträge NICHT um und kürze sie NICHT – sie sind bereits geprüft.
-6. Der <new_information>-Block enthält wörtliche Quell-Chunks mit [cNNN]-Labels. Verarbeite jeden. Versieh jede Tatsachenbehauptung, Zahl und jedes Datum mit dem passenden [cNNN].
-7. Behalte [[slug|name]]-Links NUR, wenn der Slug in <valid_wiki_links> steht. Entferne andere. Der eigene Slug ({{pageSlug}}) darf nicht als Link im eigenen Inhalt stehen.
-8. Erfinde nichts. RKI-Kürzel unverändert beibehalten.
-9. Schreibe auf {{language}}.
-{{emptyPageInstruction}}
-</instructions>
-
-Gib zuerst die SUMMARY-Zeile aus, dann den Markdown-Inhalt. Keine anderen Vorbemerkungen.`;
-
-// ---------------------------------------------------------------------------
-// Entity/Concept-Seite aktualisieren oder neu erstellen
-// ---------------------------------------------------------------------------
-export const WIKI_PAGE_MODIFY_PROMPT = `Du bist ein Wiki-Redakteur, der eine Wiki-Seite erstellt oder aktualisiert. Du bist ein KOMPILIERER, kein freier Autor: Du verdichtest die gelieferten Quell-Chunks zu einem vollständigen, gut gegliederten Artikel – ohne Fakten zu erfinden und ohne welche wegzulassen.
-
 ### Zitat- und Kompilierungs-Regeln (KRITISCH):
-- **Alle Fakten verwenden**: Der <new_information>-Block enthält WÖRTLICHE Quell-Chunks, jeder mit einem [cNNN]-Label. Verarbeite JEDEN gelieferten Chunk. Aus vielen Chunks entsteht ein langer, detaillierter Artikel – kürze NICHT auf ein bis zwei Sätze zusammen.
-- **Nah am Original**: Nutze die Formulierungen der Quelle. Du darfst umordnen, entdoppeln und verwandte Sätze verbinden, aber erfinde keine Übergänge und blähe kurze Aussagen nicht mit Floskeln auf.
-- **Nachverfolgbarkeit**: Versieh jede Tatsachenbehauptung, Zahl, Datum oder Beziehung mit dem passenden Inline-Zitat (z.B. [c003]). Bewahre bestehende [cNNN]-Zitate.
-- **Struktur**: Beginne mit "# {{pageTitle}}" gefolgt von einem Einleitungsabsatz. Gliedere längere Seiten mit ## Abschnitten (z.B. Hintergrund, Ursachen, Auswirkungen, Ausblick). Nutze Bullet-Listen für Aufzählungen von Fakten.
-- **Keine Halluzination**: Erfinde nichts, was nicht in den Quell-Chunks steht.
+${BELEG_REGELN}
 {{timestampRule}}
 
+<valid_wiki_links>
+{{availableSlugs}}
+</valid_wiki_links>
+
+<instructions>
+Gib genau diese Teile in dieser Reihenfolge aus, ohne Vorbemerkung:
+
+1. Die ERSTE Zeile: SUMMARY: {Ein Satz, 15-40 Wörter: was das Thema dieser Seite ist und welche Rolle es in den Sitzungen spielt.}
+2. Die ZWEITE Zeile: # {der Titel aus <page_metadata>}
+3. Ein Einleitungsabsatz von höchstens 4 Sätzen: was das Thema ist und worum es in den Sitzungen dazu ging. Er ersetzt <bisheriger_stand>: übernimm daraus, was weiterhin gilt, und aktualisiere ihn, statt ihn wachsen zu lassen.
+4. Die Zeile: ## Belege nach Sitzung
+5. Darunter GENAU EINE Überschrift, wörtlich so:
+
+### {{sessionLabel}}
+
+und darunter, was in dieser Sitzung gesagt oder entschieden wurde, als Bullet-Liste mit Zuordnung (z.B. "FG36:") und Inline-Zitat [cNNN]. **Höchstens 5 Punkte und ein wörtliches Zitat**, dieses als Blockzitat (>), wenn eine Bewertung oder Position ausgesprochen wurde. Keine weitere ###-Überschrift.
+
+Weitere Regeln:
+- Jede Aussage muss DIREKT vom Thema in <page_metadata> handeln.
+- Setze [[slug|name]]-Links NUR auf Slugs aus <valid_wiki_links>. Erfinde keine Slugs. Der Slug der Seite selbst darf nicht als Link im eigenen Inhalt stehen.
+- Erfinde nichts. RKI-Kürzel unverändert beibehalten.
+- Schreibe auf {{language}}.
+</instructions>
+
 <page_metadata>
   <slug>{{pageSlug}}</slug>
   <title>{{pageTitle}}</title>
@@ -306,31 +302,56 @@ export const WIKI_PAGE_MODIFY_PROMPT = `Du bist ein Wiki-Redakteur, der eine Wik
   <aliases>{{pageAliases}}</aliases>
 </page_metadata>
 
-Diese Wiki-Seite handelt spezifisch von **{{pageTitle}}** (einem/r {{pageType}}). Jede Aussage auf der Seite muss DIREKT über diese/n {{pageType}} handeln.
+<bisheriger_stand>
+{{bisheriges}}
+</bisheriger_stand>
 
-<existing_page_content>
-{{existingContent}}
-</existing_page_content>
+{{additionsSection}}`;
 
-{{additionsSection}}
+// ---------------------------------------------------------------------------
+// Entity/Concept-Seite aktualisieren oder neu erstellen (Normalfall)
+// ---------------------------------------------------------------------------
+export const WIKI_PAGE_MODIFY_PROMPT = `Du bist ein Wiki-Redakteur, der eine Themenseite um die Belege aus EINER neuen Quelle ergänzt. Du bist ein KOMPILIERER, kein freier Autor: Du verdichtest die gelieferten Quell-Chunks – ohne Fakten zu erfinden und ohne welche wegzulassen.
 
-{{retractionsSection}}
+### Zitat- und Kompilierungs-Regeln (KRITISCH):
+${BELEG_REGELN}
+{{timestampRule}}
 
 <valid_wiki_links>
 {{availableSlugs}}
 </valid_wiki_links>
 
 <instructions>
-1. Die ERSTE Zeile deiner Ausgabe MUSS sein: SUMMARY: {Ein Satz, 15-40 Wörter, der beschreibt worum es auf dieser Seite nach dem Update geht}
-{{retractionInstructions}}
-{{additionInstructions}}
-4. Erhalte vorhandene Informationen, die noch gültig sind und immer noch über {{pageTitle}} handeln.
-5. Behalte [[slug|name]] Wiki-Link-Referenzen NUR wenn der Slug in der <valid_wiki_links>-Liste oben erscheint. Entferne [[slug|name]] deren Slug NICHT in dieser Liste ist. Erfinde keine neuen Wiki-Link-Slugs. Der Slug der Seite selbst ({{pageSlug}}) darf NICHT als [[...]]-Link im eigenen Inhalt erscheinen.
-6. Schreibe auf {{language}}.
-{{emptyPageInstruction}}
+Gib genau diese Teile in dieser Reihenfolge aus, ohne Vorbemerkung:
+
+1. Die ERSTE Zeile: SUMMARY: {Ein Satz, 15-40 Wörter, worum es auf dieser Seite geht.}
+2. Die ZWEITE Zeile: # {der Titel aus <page_metadata>}
+3. Eine Einleitung von höchstens 5 Sätzen: was das Thema ist und welche Rolle es in den Quellen spielt. Sie ersetzt <bisheriger_stand>: übernimm daraus, was weiterhin gilt, und aktualisiere sie, statt sie wachsen zu lassen.
+4. Die Zeile: ## Belege nach Quelle
+5. Darunter GENAU EINE Überschrift, wörtlich so:
+
+### {{sessionLabel}}
+
+und darunter die Belege aus <new_information> als Bullet-Liste, gegliedert nach Sachzusammenhang. **Höchstens 8 Punkte und ein wörtliches Zitat**, dieses als Blockzitat (>). Jeder Punkt trägt sein [cNNN]-Zitat. Keine weitere ###-Überschrift.
+
+Weitere Regeln:
+- Jede Aussage muss DIREKT vom Thema in <page_metadata> handeln.
+- Setze [[slug|name]]-Links NUR auf Slugs aus <valid_wiki_links>. Erfinde keine Slugs. Der Slug der Seite selbst darf nicht als Link im eigenen Inhalt stehen.
+- Schreibe auf {{language}}.
 </instructions>
 
-Gib zuerst die SUMMARY-Zeile aus, dann den aktualisierten Markdown-Inhalt. Keine anderen Vorbemerkungen.`;
+<page_metadata>
+  <slug>{{pageSlug}}</slug>
+  <title>{{pageTitle}}</title>
+  <type>{{pageType}}</type>
+  <aliases>{{pageAliases}}</aliases>
+</page_metadata>
+
+<bisheriger_stand>
+{{bisheriges}}
+</bisheriger_stand>
+
+{{additionsSection}}`;
 
 // ---------------------------------------------------------------------------
 // Duplikate zwischen neuen und existierenden Pages erkennen
