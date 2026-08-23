@@ -55,7 +55,7 @@ export type UsageKind = (typeof USAGE)[keyof typeof USAGE];
  * wurde — und eine Summe über einen Zeitraum, in dem sich der Preis geändert
  * hat, wäre nicht mehr erklärbar.
  */
-export const PREIS_VERSION = "2026-08-23";
+export const PREIS_VERSION = "2026-08-23b";
 
 /**
  * Umrechnungskurs Dollar → Euro.
@@ -123,6 +123,20 @@ const PREISE: Record<string, Preis> = {
   // Ältere Namen, die DeepSeek als Alias weiterführt.
   "deepseek-chat": { in: 0.44, in_cached: 0.014, out: 1.32, offPeakHalb: true },
   "deepseek-reasoner": { in: 1.32, in_cached: 0.044, out: 3.96, offPeakHalb: true },
+  // OpenRouter reicht DeepSeek durch, rechnet aber nach EIGENER Liste ab —
+  // deshalb ein eigener Eintrag und kein Alias auf den Namen ohne Präfix. Die
+  // Modell-ID trägt das Anbieter-Präfix so, wie OpenRouter sie verlangt und wie
+  // sie in usage_events.model landet.
+  //
+  // Preise von openrouter.ai/models (DeepSeek V4 Flash, Stand 23. August 2026).
+  // Zwei Abweichungen zum Eintrag oben sind Absicht, keine Schlamperei:
+  //  - Kein offPeakHalb: OpenRouter weist einen festen Preis aus, der
+  //    Nachtrabatt der DeepSeek-API gilt hier nicht.
+  //  - in_cached = in: OpenRouter nennt auf der Modellseite keinen Preis für
+  //    Cache-Treffer. Lieber ohne Rabatt rechnen und damit eine Obergrenze
+  //    ausweisen, als das Dreißigstel der DeepSeek-Liste zu unterstellen und
+  //    die Kosten zu niedrig anzuzeigen.
+  "deepseek/deepseek-v4-flash": { in: 0.04, in_cached: 0.04, out: 0.13 },
   // OpenAI-Embeddings — nur Eingabe, kein Cache, keine Stoßzeit.
   "text-embedding-3-small": { in: 0.02, in_cached: 0.02, out: 0 },
   "text-embedding-3-large": { in: 0.13, in_cached: 0.13, out: 0 },
