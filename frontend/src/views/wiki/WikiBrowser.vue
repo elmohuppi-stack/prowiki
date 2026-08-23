@@ -218,6 +218,11 @@
         <div class="discovery-head">
           <div class="result-count">
             <strong>{{ total }}</strong> {{ typeLabelPlural }}
+            <!-- Sonst stünde über der Liste eine Zahl, die nicht zu den
+                 sichtbaren Einträgen passt. -->
+            <span v-if="gebuendelteKapitel" class="count-hint">
+              · {{ gebuendelteKapitel }} Kapitel in ihrer Übersicht
+            </span>
           </div>
           <div class="active-chips" v-if="hasActiveFilters">
             <span v-if="searchQuery" class="chip">
@@ -240,6 +245,25 @@
               🔎 verweist auf „{{ refDisplay }}"
               <button @click="clearReferences">✕</button>
             </span>
+          </div>
+
+          <div class="view-toggle" role="group" aria-label="Ansicht">
+            <button
+              :class="{ active: ansicht === 'karten' }"
+              :aria-pressed="ansicht === 'karten'"
+              title="Karten mit Zusammenfassung"
+              @click="ansicht = 'karten'"
+            >
+              ▦ Karten
+            </button>
+            <button
+              :class="{ active: ansicht === 'liste' }"
+              :aria-pressed="ansicht === 'liste'"
+              title="Kompakte Liste"
+              @click="ansicht = 'liste'"
+            >
+              ☰ Liste
+            </button>
           </div>
         </div>
 
@@ -293,9 +317,9 @@
           </p>
         </div>
 
-        <div v-else class="result-grid">
+        <div v-else-if="ansicht === 'karten'" class="result-grid">
           <article
-            v-for="p in pages"
+            v-for="p in listenSeiten"
             :key="p.id"
             class="result-card"
             @click="selectPage(p)"
@@ -310,6 +334,11 @@
               <template v-if="p.document_title">
                 · {{ stripWikiLinks(p.document_title) }}
               </template>
+            </p>
+            <!-- Eine Übersicht steht für ihr ganzes Dokument; ohne diese Zahl
+                 wäre nicht zu sehen, wie viel dahinter steckt. -->
+            <p v-else-if="kapitelJeUebersicht.get(p.slug)" class="card-parent">
+              {{ kapitelJeUebersicht.get(p.slug) }} Kapitel
             </p>
             <p class="card-summary">{{ stripWikiLinks(p.summary) }}</p>
             <!-- Auffälligkeiten aus page_metadata.flags – der schnellste Weg zu
@@ -334,6 +363,47 @@
             </div>
           </article>
         </div>
+
+        <table v-else class="result-table">
+          <thead>
+            <tr>
+              <th>Titel</th>
+              <th class="col-type">Typ</th>
+              <th class="col-date">Datum</th>
+              <th class="col-links">Verweise</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="p in listenSeiten" :key="p.id" @click="selectPage(p)">
+              <td class="cell-title">
+                {{ stripWikiLinks(p.title) }}
+                <span v-if="zeilenUntertitel(p)" class="item-subtitle">{{
+                  zeilenUntertitel(p)
+                }}</span>
+                <span v-if="pageFlags(p).length" class="card-flags">
+                  <span v-for="f in pageFlags(p)" :key="f" class="flag-chip">
+                    {{ flagLabel(f) }}
+                  </span>
+                </span>
+              </td>
+              <td class="col-type">
+                <span :class="['card-type', p.page_type]">{{
+                  pageRoleLabel(p)
+                }}</span>
+              </td>
+              <td
+                class="col-date"
+                :title="sessionDate(p) ? 'Sitzungsdatum' : 'Zuletzt bearbeitet'"
+              >
+                {{ sessionDate(p) || formatDate(p.updated_at) }}
+              </td>
+              <td class="col-links">
+                <span v-if="p.out_links?.length">{{ p.out_links.length }} →</span>
+                <span v-if="p.in_links?.length">{{ p.in_links.length }} ←</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
 
         <!-- Nachladen: die Liste war auf 200 Treffer begrenzt und alles darüber
              hinaus unerreichbar – bei einigen hundert Protokollen die Hälfte. -->
@@ -772,13 +842,51 @@ const parentSlugs = computed(
   () => new Set(pages.value.map((p) => p.parent_slug).filter(Boolean)),
 );
 
+/** Slugs im aktuellen Ergebnis – Grundlage jeder Einhänge-Entscheidung. */
+const geladeneSlugs = computed(
+  () => new Set(pages.value.map((p) => p.slug)),
+);
+
+/**
+ * Gehört diese Seite als Kapitel unter eine Übersicht, die auch im Ergebnis steht?
+ *
+ * Die zweite Hälfte der Frage ist die wichtige: bei einer Suche, die nur das
+ * Kapitel trifft, ist die Übersicht nicht dabei – dann muss das Kapitel für sich
+ * stehen bleiben, sonst verschwindet der Treffer spurlos.
+ */
+function istEingehaengtesKapitel(p: any): boolean {
+  return Boolean(p.parent_slug && geladeneSlugs.value.has(p.parent_slug));
+}
+
+/** Kapitel je Übersicht im aktuellen Ergebnis (für die Anzeige "5 Kapitel"). */
+const kapitelJeUebersicht = computed(() => {
+  const zaehler = new Map<string, number>();
+  for (const p of pages.value) {
+    if (!istEingehaengtesKapitel(p)) continue;
+    zaehler.set(p.parent_slug, (zaehler.get(p.parent_slug) || 0) + 1);
+  }
+  return zaehler;
+});
+
+/**
+ * Die Liste, wie sie im Hauptbereich erscheint: ein Dokument mit mehreren
+ * Kapiteln belegt EINE Zeile/Karte – die Übersicht. Ihre Kapitel sind über die
+ * Rail, das Inhaltsverzeichnis der Übersicht und die Kapitel-Navigation im
+ * Leser erreichbar; als eigene Karten haben sie die Trefferliste zugeschüttet.
+ */
+const listenSeiten = computed(() =>
+  pages.value.filter((p) => !istEingehaengtesKapitel(p)),
+);
+
+/** Wie viele Kapitel gerade in ihrer Übersicht stecken (Hinweis am Zähler). */
+const gebuendelteKapitel = computed(
+  () => pages.value.length - listenSeiten.value.length,
+);
+
 const railTree = computed(() => {
-  const bySlug = new Set(pages.value.map((p) => p.slug));
   const childrenOf = new Map<string, any[]>();
   for (const p of pages.value) {
-    // Nur einhängen, wenn die Übersicht im aktuellen Ergebnis auch vorkommt –
-    // sonst würde ein Kapitel bei aktivem Filter/Suche komplett verschwinden.
-    if (p.parent_slug && bySlug.has(p.parent_slug)) {
+    if (istEingehaengtesKapitel(p)) {
       const arr = childrenOf.get(p.parent_slug) || [];
       arr.push(p);
       childrenOf.set(p.parent_slug, arr);
@@ -787,10 +895,39 @@ const railTree = computed(() => {
   for (const arr of childrenOf.values()) {
     arr.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
   }
-  return pages.value
-    .filter((p) => !(p.parent_slug && bySlug.has(p.parent_slug)))
-    .map((p) => ({ page: p, children: childrenOf.get(p.slug) || [] }));
+  return listenSeiten.value.map((p) => ({
+    page: p,
+    children: childrenOf.get(p.slug) || [],
+  }));
 });
+
+// ---- Karten- oder Listenansicht -----------------------------------------
+// Karten zeigen die Zusammenfassung und eignen sich zum Stöbern, die Liste
+// bringt mehr Titel auf den Schirm. Die Wahl bleibt erhalten, weil sie eine
+// Arbeitsgewohnheit ist und keine Entscheidung pro Besuch.
+const ansicht = ref<"karten" | "liste">(
+  localStorage.getItem("wikiAnsicht") === "liste" ? "liste" : "karten",
+);
+watch(ansicht, (a) => localStorage.setItem("wikiAnsicht", a));
+
+/**
+ * Zweite Zeile eines Listeneintrags: die Einordnung, die in der Karte über der
+ * Zusammenfassung steht (Kapitelzahl, Zugehörigkeit, Kanal).
+ */
+function zeilenUntertitel(p: any): string {
+  const teile: string[] = [];
+  const kapitel = kapitelJeUebersicht.value.get(p.slug);
+  if (kapitel) teile.push(`${kapitel} Kapitel`);
+  else if (p.parent_slug) {
+    teile.push(
+      p.document_title
+        ? `Kapitel ${p.sort_order} · ${stripWikiLinks(p.document_title)}`
+        : `Kapitel ${p.sort_order}`,
+    );
+  }
+  if (p.document_channel) teile.push(p.document_channel);
+  return teile.join(" · ");
+}
 
 // Auf-/Zuklappen: Default ist zu (kurze Liste); die Gruppe des offenen Artikels
 // klappt automatisch auf. Ein Caret-Klick setzt einen expliziten Override, der
@@ -2058,6 +2195,91 @@ function closeImport() {
   font-size: 0.8rem;
   color: var(--color-text-secondary);
   margin-top: 0.25rem;
+}
+
+.count-hint {
+  font-size: 0.85rem;
+}
+.view-toggle {
+  display: flex;
+  margin-left: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.view-toggle button {
+  border: none;
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  padding: 0.35rem 0.7rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.view-toggle button + button {
+  border-left: 1px solid var(--color-border);
+}
+.view-toggle button:hover {
+  color: var(--color-text);
+}
+.view-toggle button.active {
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+/* Listenansicht: gleiche Spaltenlogik wie die Dokumententabelle */
+.result-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.result-table th,
+.result-table td {
+  text-align: left;
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.875rem;
+  vertical-align: top;
+}
+.result-table th {
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+}
+.result-table tbody tr {
+  cursor: pointer;
+}
+.result-table tbody tr:hover {
+  background: var(--color-bg-secondary);
+}
+.result-table .cell-title {
+  font-weight: 600;
+}
+.result-table .item-subtitle {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  font-weight: normal;
+  margin-top: 0.15rem;
+}
+.result-table .card-flags {
+  margin-top: 0.3rem;
+}
+.result-table .col-date,
+.result-table .col-links {
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+  font-weight: normal;
+}
+.result-table .col-links span + span {
+  margin-left: 0.4rem;
+}
+/* Auf dem Telefon bleibt nur, was die Zeile identifiziert. */
+@media (max-width: 768px) {
+  .result-table .col-type,
+  .result-table .col-links {
+    display: none;
+  }
 }
 
 .result-grid {
