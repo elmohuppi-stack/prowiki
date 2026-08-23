@@ -164,6 +164,7 @@ chatRouter.post("/", LIMITS.chat, zValidator("json", chatSchema), async (c) => {
     reply = await callLLM(provider, message, context, history, {
       wikiId: wiki_id ?? null,
       sessionId: session.id,
+      userId: principal.userId ?? undefined,
     });
   } else {
     reply =
@@ -268,6 +269,13 @@ chatRouter.post("/stream", LIMITS.chat, zValidator("json", chatSchema), async (c
     body: JSON.stringify({
       model: provider.default_model,
       stream: true,
+      // Ohne dieses Feld liefert ein Stream **kein** usage-Objekt — und genau
+      // daran lag es, dass in `usage_events` monatelang kein einziger
+      // llm_chat-Posten stand, obwohl der Chat der meistbenutzte Weg zum
+      // Modell ist. Die Zählung war nicht kaputt, sie bekam nichts zu zählen.
+      // Der Anbieter hängt die Zahlen dann als eigenen Datenblock an, dessen
+      // `choices` leer ist.
+      stream_options: { include_usage: true },
       messages: [
         { role: "system", content: systemPrompt },
         ...history,
@@ -330,6 +338,14 @@ chatRouter.post("/stream", LIMITS.chat, zValidator("json", chatSchema), async (c
   if (reader) {
     (async () => {
       let buffer = "";
+      // Der Verbrauchsblock kommt irgendwann im Stream und nicht zwingend als
+      // letzter vor [DONE]. Deshalb beim Vorbeikommen gemerkt, statt am Ende
+      // an einer bestimmten Stelle danach zu suchen.
+      let verbrauch: {
+        tokensIn: number;
+        tokensOut: number;
+        tokensCached: number;
+      } | null = null;
       try {
         while (true) {
           const { done, value } = await reader.read();
@@ -345,6 +361,8 @@ chatRouter.post("/stream", LIMITS.chat, zValidator("json", chatSchema), async (c
               if (data === "[DONE]") continue;
               try {
                 const json = JSON.parse(data);
+                const t = tokensAus(json);
+                if (t) verbrauch = t;
                 const delta =
                   json.choices?.[0]?.delta?.content ||
                   json.choices?.[0]?.text ||
@@ -358,6 +376,24 @@ chatRouter.post("/stream", LIMITS.chat, zValidator("json", chatSchema), async (c
         }
       } finally {
         textWriter.close();
+        // Nach dem close(), damit die Buchhaltung die Antwort nicht aufhält —
+        // und im finally, weil auch ein mittendrin abgebrochener Stream bezahlt
+        // ist: berechnet wird, was das Modell erzeugt hat, nicht was beim
+        // Browser ankam.
+        if (verbrauch) {
+          await zähleNutzung({
+            kind: USAGE.llmChat,
+            wikiId: wiki_id ?? null,
+            // Ein Chat ohne ausgewähltes Wiki hat keinen Mandanten am Inhalt —
+            // dann entscheidet der Verursacher, sofern eindeutig.
+            userId: principal.userId,
+            model: provider.default_model,
+            tokensIn: verbrauch.tokensIn,
+            tokensOut: verbrauch.tokensOut,
+            tokensCached: verbrauch.tokensCached,
+            refId: session.id,
+          });
+        }
       }
     })();
   } else {
@@ -447,7 +483,7 @@ async function callLLM(
   context: string,
   history: { role: "user" | "assistant"; content: string }[] = [],
   /** Für die Kostenzählung. Ohne ihn bliebe der Chat in der Abrechnung leer. */
-  zählung?: { wikiId: string | null; sessionId: string },
+  zählung?: { wikiId: string | null; sessionId: string; userId?: string },
 ): Promise<string> {
   const systemPrompt = context
     ? `Du bist ein hilfreicher Assistent mit Zugriff auf eine Wissensdatenbank.
@@ -491,6 +527,7 @@ ${context}`
         await zähleNutzung({
           kind: USAGE.llmChat,
           wikiId: zählung.wikiId,
+          userId: zählung.userId,
           model: provider.default_model,
           tokensIn: t.tokensIn,
           tokensOut: t.tokensOut,

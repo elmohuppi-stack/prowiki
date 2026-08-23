@@ -26,7 +26,7 @@
  * Funktionen fangen deshalb selbst ab und melden in der Konsole.
  */
 import { db } from "../db/index.ts";
-import { usageEvents, wikis } from "../db/schema.ts";
+import { usageEvents, wikis, member } from "../db/schema.ts";
 import { eq } from "drizzle-orm";
 
 /** Die Arten, in denen bei prowiki Kosten anfallen. */
@@ -228,11 +228,44 @@ async function organisationFürWiki(wikiId: string): Promise<string | null> {
   return w.organization_id;
 }
 
+/**
+ * Die Organisation zu einem Nutzer — aber nur, wenn sie eindeutig ist.
+ *
+ * Notlösung für Posten ohne Wiki, und der einzige Fall, in dem es sie gibt:
+ * ein Chat ohne ausgewähltes Wiki. Der ist trotzdem bezahlt und soll nicht aus
+ * der Abrechnung fallen.
+ *
+ * Bei **mehreren** Mitgliedschaften wird bewusst nichts geliefert. Eine davon
+ * zu greifen hieße, den Posten einem Mandanten zuzuschlagen, der ihn
+ * vielleicht nicht verursacht hat — und eine falsche Zuordnung ist in einer
+ * Abrechnung schlimmer als eine fehlende: die eine sieht man, die andere
+ * bezahlt jemand.
+ */
+const orgJeNutzer = new Map<string, string | null>();
+
+async function organisationFürNutzer(userId: string): Promise<string | null> {
+  if (orgJeNutzer.has(userId)) return orgJeNutzer.get(userId)!;
+  const zeilen = await db
+    .select({ organizationId: member.organizationId })
+    .from(member)
+    .where(eq(member.userId, userId))
+    .limit(2);
+  const eindeutig = zeilen.length === 1 ? zeilen[0].organizationId : null;
+  orgJeNutzer.set(userId, eindeutig);
+  return eindeutig;
+}
+
 export interface Zählwert {
   kind: UsageKind;
   /** Eines von beiden genügt; ohne Wiki muss die Organisation dabeistehen. */
   wikiId?: string | null;
   organizationId?: string | null;
+  /**
+   * Letzter Ausweg, wenn weder Wiki noch Organisation feststehen: der
+   * Verursacher. Greift nur bei eindeutiger Mitgliedschaft, siehe
+   * organisationFürNutzer.
+   */
+  userId?: string | null;
   model?: string | null;
   tokensIn?: number;
   tokensOut?: number;
@@ -261,6 +294,7 @@ export async function zähleNutzung(w: Zählwert): Promise<void> {
   try {
     let orgId = w.organizationId ?? null;
     if (!orgId && w.wikiId) orgId = await organisationFürWiki(w.wikiId);
+    if (!orgId && w.userId) orgId = await organisationFürNutzer(w.userId);
     if (!orgId) {
       console.warn(
         `[usage] ${w.kind} ohne Organisation – nicht gezählt (wiki=${w.wikiId ?? "–"})`,
