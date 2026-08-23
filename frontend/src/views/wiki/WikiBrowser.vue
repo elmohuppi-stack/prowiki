@@ -185,6 +185,10 @@
             >
               {{ isExpanded(node.page.slug) ? "▾" : "▸" }}
             </button>
+            <!-- Ohne Kapitel bleibt die Spalte des Aufklappers trotzdem frei:
+                 sonst begännen Einträge mit und ohne Kapitel auf verschiedenen
+                 Fluchtlinien, und die Liste sähe eingerückt aus. -->
+            <span v-else class="rail-caret rail-caret-leer" aria-hidden="true"></span>
             <span class="rail-label">{{ stripWikiLinks(node.page.title) }}</span>
             <span
               v-if="node.children.length"
@@ -2027,6 +2031,9 @@ function closeImport() {
 }
 .rail-caret:hover {
   opacity: 1;
+}
+.rail-caret-leer {
+  cursor: inherit;
 }
 .rail-count {
   flex: 0 0 auto;
