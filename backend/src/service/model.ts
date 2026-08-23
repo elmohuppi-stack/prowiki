@@ -202,15 +202,22 @@ export async function testProvider(
   const istEmbedding = data.provider_type === "embedding";
   const url = `${basis}${istEmbedding ? "/embeddings" : "/chat/completions"}`;
 
-  // Kürzestmögliche echte Anfrage: sie kostet Bruchteile eines Cents und
-  // beantwortet trotzdem alle drei Fragen (URL erreichbar, Schlüssel gültig,
-  // Modellname bekannt).
+  // Kurze echte Anfrage: sie kostet Bruchteile eines Cents und beantwortet
+  // trotzdem alle drei Fragen (URL erreichbar, Schlüssel gültig, Modellname
+  // bekannt).
+  //
+  // `max_tokens` stand zuerst auf 5 und war damit zu knapp: ein Modell mit
+  // Denkschritten (deepseek-v4-flash über OpenRouter) verbraucht das Budget
+  // im Denken und liefert eine gültige Antwort mit leerem `content` und
+  // `finish_reason: "length"`. Der Test meldete daraufhin „keine Chat-Antwort"
+  // für einen Anbieter, der einwandfrei funktioniert — ein Fehlalarm ist bei
+  // einem Prüfknopf schlimmer als eine Sekunde Wartezeit mehr.
   const body = istEmbedding
     ? { model: data.default_model, input: "prowiki test" }
     : {
         model: data.default_model,
         messages: [{ role: "user", content: "Antworte nur mit: ok" }],
-        max_tokens: 5,
+        max_tokens: 256,
       };
 
   const entschärfen = (s: string) =>
@@ -272,21 +279,53 @@ export async function testProvider(
       };
     }
 
-    const inhalt = json?.choices?.[0]?.message?.content;
-    if (typeof inhalt !== "string") {
+    /**
+     * Was den Test bestehen lässt.
+     *
+     * Nicht der Text, sondern die **Form** der Antwort: ein `choices`-Eintrag
+     * bei HTTP 200 beweist bereits alles, wonach der Knopf fragt — die URL
+     * stimmt, der Schlüssel gilt, den Modellnamen kennt der Anbieter. Ob dabei
+     * ein Wort herauskam, hängt am Token-Budget dieses Testaufrufs und sagt
+     * nichts über den Echtbetrieb, der mit 8192 rechnet (service/llm.ts).
+     *
+     * Deshalb ist ein leerer Inhalt hier kein Fehlschlag, sondern eine
+     * Bemerkung. Erst wenn gar kein `choices`-Eintrag kommt, antwortet etwas
+     * anderes als eine OpenAI-kompatible API.
+     */
+    const wahl = json?.choices?.[0];
+    if (!wahl) {
       return {
         ok: false,
         status: resp.status,
         dauer_ms,
-        fehler: `Keine Chat-Antwort in der Rückgabe — ${entschärfen(text)}`,
+        fehler:
+          `Antwort ohne choices — das sieht nicht nach einer ` +
+          `OpenAI-kompatiblen API aus: ${entschärfen(text)}`,
       };
     }
+
+    const inhalt =
+      typeof wahl?.message?.content === "string" ? wahl.message.content.trim() : "";
+    // Modelle mit Denkschritten legen ihn getrennt ab. Für die Anzeige reicht
+    // er als Nachweis, dass das Modell wirklich gearbeitet hat.
+    const denken =
+      typeof wahl?.message?.reasoning === "string"
+        ? wahl.message.reasoning.trim()
+        : "";
+
+    let antwort = inhalt.slice(0, 120);
+    if (!antwort) {
+      antwort = denken
+        ? `leer, aber ${denken.length} Zeichen Denkschritte (finish_reason: ${wahl.finish_reason ?? "?"})`
+        : `leer (finish_reason: ${wahl.finish_reason ?? "?"})`;
+    }
+
     return {
       ok: true,
       status: resp.status,
       dauer_ms,
       modell: json?.model ?? data.default_model,
-      antwort: inhalt.trim().slice(0, 120) || "(leer)",
+      antwort,
     };
   } catch (e: any) {
     return {
