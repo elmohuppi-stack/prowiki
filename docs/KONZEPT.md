@@ -275,6 +275,7 @@ video.ingest      Metadaten + Transkript holen, Dokument anlegen  (idempotent ü
 document.chunk    Chunking + Embedding
 wiki.generate     Artikel erzeugen
 wiki.relink       Backlinks/Graph nachziehen
+wiki.lint         Wiki gegen sich selbst prüfen (4.7), als Cron
 ```
 
 Fortschritt gehört ins UI: „147 von 312 Videos verarbeitet, 3 fehlgeschlagen" mit
@@ -322,6 +323,37 @@ Für die Architektur hier genügen zwei Ergebnisse daraus:
 - **Vor dem ersten großen Import ist kein neuer Server nötig.** Stufe 0 läuft vollständig
   lokal gegen `docker-compose.dev.yml`.
 
+### 4.7 Wiki-Pflege: der Lint-Lauf
+
+Die Generierung schreibt Seiten fort, aber niemand prüft das Ergebnis als Ganzes. Bei knora
+war das verschmerzbar, weil jede Quelle einzeln und unter Aufsicht hereinkam. Der
+Kanal-Import aus 4.4 kehrt das um: 312 Videos laufen in einem Vorgang durch, ohne dass ein
+Mensch dazwischensteht. Damit wird eine Prüfung *nach* dem Lauf zur Voraussetzung dafür, dem
+Ergebnis zu trauen — und zwar mehr als bei einem Werkzeug, das man von Hand füttert.
+
+Der Lint-Lauf ist ein Job (`wiki.lint`, als Cron je Wiki und nach jedem größeren Import), der
+das Wiki gegen sich selbst prüft. Er ändert nichts, er meldet:
+
+| Befund | Woraus er sich ergibt |
+|---|---|
+| Widersprüche zwischen Seiten | zwei Seiten behaupten Gegensätzliches über dieselbe Entität |
+| überholte Aussagen | eine neuere Quelle widerspricht einem älteren Belegabschnitt derselben Seite |
+| Waisenseiten | Seite ohne eingehenden `[[Slug]]` — die Backlink-Tabelle liegt vor |
+| fehlende Seiten | Begriff taucht häufig auf, hat aber keine eigene Seite |
+| fehlende Querverweise | Seite nennt eine Entität, die es als Seite gibt, ohne sie zu verlinken |
+| Lücken | Thema mit dünner Belegdecke — Hinweis, welche Quelle noch fehlt |
+
+Die Befunde landen nicht im Log, sondern in einer **Redaktions-Inbox** je Wiki: eine Liste mit
+Seitenbezug, die man abarbeitet, zuweist oder verwirft. Sie ist der Gegenpol zum Batch-Import
+und zugleich die Grundlage für den Freigabe-Workflow aus Stufe 3.
+
+Zwei Dinge fallen dabei ab. Erstens ist „überholte Aussage" mechanisch dieselbe Abfrage wie
+der **Positionswandel** aus 5.2 — der Lint-Lauf ist der Motor für dieses Feature, nicht ein
+zweites System daneben. Zweitens ist die Kostenseite zu beachten: ein Lint über ein Wiki mit
+5.703 Seiten ist kein kleiner Lauf. Er gehört unter dieselbe Zählung und denselben Deckel wie
+alles andere (4.5), mit einstellbarem Umfang — täglich nur das seit dem letzten Lauf
+Geänderte, vollständig nur auf Anforderung.
+
 ---
 
 ## 5. Weitere Vorschläge — was prowiki zum Werkzeug macht
@@ -336,44 +368,90 @@ Für die Architektur hier genügen zwei Ergebnisse daraus:
    der Traffic ist unserer. Stärkster Vertriebskanal, den dieses Produkt haben kann.
 3. **Fehler melden.** Ein Knopf unter jedem öffentlichen Artikel. LLM-generierte Inhalte
    haben Fehler; das Publikum eines Kanals findet sie zuverlässig und gern.
-4. **Export.** Markdown-ZIP plus JSON pro Wiki. Nimmt Interessenten die Angst vor
-   Lock-in — und kostet einen Tag Arbeit.
+4. **Export als OKF-Bundle (Obsidian-kompatibel).** Markdown-ZIP plus JSON pro Wiki. Nimmt
+   Interessenten die Angst vor Lock-in — und kostet einen Tag Arbeit. Der Hebel liegt in der
+   Form. Googles [Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing)
+   (OKF v0.1, 12. Juni 2026) legt für genau dieses Muster Feldnamen fest: ein Verzeichnis
+   Markdown-Dateien mit YAML-Frontmatter, ein Pflichtfeld `type`, dazu `title`,
+   `description`, `resource`, `tags`, `timestamp`; `index.md` und `log.md` sind reservierte
+   Dateinamen. Was wir dafür brauchen, liegt fast vollständig vor:
+
+   | Bei uns | OKF |
+   |---|---|
+   | Taxonomie Summary/Concept/Entity | `type` — Vokabular definiert der Produzent |
+   | Seitenindex | `index.md` |
+   | Änderungs-Chronik (Punkt 8) | `log.md` |
+   | `source_url` / tiefer Video-Link | `resource` |
+   | `[[Slug]]` | gewöhnliche Markdown-Links — **die einzige echte Umstellung** |
+
+   Weil Obsidian gewöhnliche Markdown-Links liest, ist ein OKF-konformer Export gleichzeitig
+   ein benutzbarer Vault: ein Export, zwei Zwecke, keine doppelte Arbeit. Der Gewinn ist ein
+   Verkaufsargument — „Ihr Wiki liegt in einem offenen Standard vor" schlägt bei Redaktionen
+   und Firmenkunden „Sie bekommen ein ZIP". Wichtig ist die Beschränkung: OKF wird **nur an
+   der Außenkante gesprochen**. Intern bleiben Seiten in Postgres mit Revisionen,
+   Chunk-Bezügen, Sichtbarkeit und Mandant — ein Dateiformat ist dafür kein Ersatz, und OKF
+   v0.1 von einem einzigen Anbieter ist zu jung für eine Wette auf das Datenmodell. Auch die
+   dortige Navigationsidee (der Agent liest `index.md` und steigt ab) übernehmen wir nicht:
+   dieselbe Index-first-Annahme wie bei Karpathy, die bei 5.703 Seiten nicht trägt. Unsere
+   hybride Suche bleibt.
 5. **Sitemap, OpenGraph, `robots.txt`, RSS je Wiki.** Fällt mit 4.2 fast von selbst ab.
 6. **Analytics pro Wiki:** meistgelesene Artikel, gestellte Fragen, Fragen ohne gute
    Antwort. Letzteres ist redaktionell Gold — es zeigt, worüber das nächste Video geht.
    Umami läuft auf dem Server bereits.
+7. **Redaktionsanweisung je Wiki.** `wiki_config` (`schema/tenancy.ts`) kennt heute nur
+   Schalter: Sprache, Tiefe, Granularität. Was fehlt, ist ein Freitextfeld, das in
+   `service/wiki-prompts.ts` einfließt — Tonfall, welche Seitentypen es geben soll, wie
+   Personen benannt werden, was nie ohne Beleg behauptet werden darf, welche Themen außen
+   vor bleiben. Ein Interview-Kanal, eine Behördendokumentation und eine interne
+   Wissensbasis brauchen unterschiedliche Ergebnisse aus derselben Pipeline. Das ist der
+   Unterschied zwischen einem gehorsamen Redakteur und einem generischen Chatbot, kostet
+   wenig und macht das Ergebnis für den Kunden ohne unseren Eingriff steuerbar.
+8. **Änderungs-Chronik je Wiki.** `activity_logs` und `wiki_page_revisions` halten alles
+   fest, aber nichts davon beantwortet die Frage „was hat sich hier seit letzter Woche
+   geändert". Eine lesbare, fortlaufende Chronik — neue Quellen, neue und geänderte Seiten,
+   Lint-Läufe — ist intern die Kontrolle über einen Import, den niemand beaufsichtigt hat,
+   und öffentlich ein „Zuletzt aktualisiert"-Feed, der ein Kanal-Publikum zurückholt. Fällt
+   mit dem RSS aus Punkt 5 fast zusammen.
 
 ### 5.2 Mittelfristig, differenzierend
 
-7. **Sprecher und Gäste als Entitäten.** Die Entity-Taxonomie existiert schon. Bei einem
+9. **Sprecher und Gäste als Entitäten.** Die Entity-Taxonomie existiert schon. Bei einem
    Interview-Format ist „alle Aussagen von Gast X über Thema Y" die eigentliche Suchanfrage.
-8. **Zeitachse und Positionswandel.** Über 300 Videos hinweg zeigen, wie sich eine Position
-   zu einem Thema entwickelt hat — mit Belegzitaten und Datum. Journalistisch stark,
-   politisch heikel, deshalb ausschließlich mit wörtlichen Zitaten und Quellenlink.
-9. **Übersetzte Wikis.** Ein deutscher Kanal erreicht auf Englisch ein Vielfaches. Die
-   Übersetzung ist billiger als die Generierung, weil das Material schon strukturiert ist.
-10. **Redaktioneller Freigabe-Workflow.** Entwurf → Review → veröffentlicht existiert im
+10. **Zeitachse und Positionswandel.** Über 300 Videos hinweg zeigen, wie sich eine Position
+    zu einem Thema entwickelt hat — mit Belegzitaten und Datum. Journalistisch stark,
+    politisch heikel, deshalb ausschließlich mit wörtlichen Zitaten und Quellenlink.
+    Mechanisch ist das dieselbe Abfrage wie „überholte Aussage" im Lint-Lauf (4.7) —
+    gebaut wird es einmal, nicht zweimal.
+11. **Übersetzte Wikis.** Ein deutscher Kanal erreicht auf Englisch ein Vielfaches. Die
+    Übersetzung ist billiger als die Generierung, weil das Material schon strukturiert ist.
+12. **Redaktioneller Freigabe-Workflow.** Entwurf → Review → veröffentlicht existiert im
     Ansatz (`status`, Cluster-Review). Ausbauen zu Zuweisung, Kommentaren, Diff-Ansicht
     zwischen Revisionen (die Revisionen liegen schon in der DB).
-11. **WYSIWYG-Editor.** TipTap ist installiert und nicht verdrahtet. Für Kunden, die kein
+13. **WYSIWYG-Editor.** TipTap ist installiert und nicht verdrahtet. Für Kunden, die kein
     Markdown schreiben, ist eine Textarea ein Ausschlussgrund.
-12. **API + Webhooks.** `api_keys` aus 4.1 plus Ereignisse wie „Artikel veröffentlicht".
+14. **API + Webhooks.** `api_keys` aus 4.1 plus Ereignisse wie „Artikel veröffentlicht".
     Erlaubt Kunden eigene Automatisierungen und macht das Produkt integrierbar.
 
 ### 5.3 Weitere Quellen
 
-13. Podcasts über RSS-Feed (Whisper-Transkription), Spotify, Vimeo — dieselbe Pipeline wie
+15. Podcasts über RSS-Feed (Whisper-Transkription), Spotify, Vimeo — dieselbe Pipeline wie
     YouTube, nur ein anderer Enumerator.
-14. Notion, Confluence, Google Drive, Slack-Archive für die interne Wissensbasis. Das ist
+16. Notion, Confluence, Google Drive, Slack-Archive für die interne Wissensbasis. Das ist
     der Weg in Firmenkunden hinein, wenn das öffentliche Wiki den Einstieg gemacht hat.
+17. **OKF-Bundle als Quellenart** — die Gegenrichtung zum Export aus 5.1/4. Ein Kunde, dessen
+    Datenteam seinen Katalog ohnehin als OKF ausgibt, lädt ihn hoch statt ihn abzuschreiben.
+    Der billigste Import der ganzen Pipeline, weil Struktur, Typen und Querverweise schon
+    vorliegen: es entfällt genau die Extraktion, die bei einem Transkript das Geld kostet.
+    Heute spekulativ — es offenzuhalten kostet nichts, sobald der Export das Format
+    beherrscht.
 
 ### 5.4 Monetarisierung
 
-15. **Mitglieder-Bereich.** Sichtbarkeit `members` plus Anbindung an Steady/Patreon/Stripe.
+18. **Mitglieder-Bereich.** Sichtbarkeit `members` plus Anbindung an Steady/Patreon/Stripe.
     Genau so verdienen unabhängige Kanäle Geld: Wiki öffentlich als Reichweite, Archiv,
     Volltextsuche und Chat für zahlende Unterstützer. Das ist für die Zielgruppe
     wahrscheinlich das kaufentscheidende Merkmal.
-16. **Tarife** entlang der Zählung aus 4.5: Videos/Monat, Wikis, Sitze, Custom Domain,
+19. **Tarife** entlang der Zählung aus 4.5: Videos/Monat, Wikis, Sitze, Custom Domain,
     eigener LLM-Schlüssel („bring your own key" statt unserem Kontingent).
 
 ### 5.5 Rechtliches — vor dem ersten Fremdkunden zu klären
@@ -386,14 +464,14 @@ Für die Architektur hier genügen zwei Ergebnisse daraus:
 > ganze Abschnitt für den Fall eines Plattform-Kontingents) stehen in
 > [DRITTLAND-DEEPSEEK.md](DRITTLAND-DEEPSEEK.md).
 
-17. **AGB, Datenschutzerklärung, Auftragsverarbeitungsvertrag, Impressumspflicht pro Wiki.**
+20. **AGB, Datenschutzerklärung, Auftragsverarbeitungsvertrag, Impressumspflicht pro Wiki.**
     Sobald Dritte Inhalte veröffentlichen, ist prowiki Hoster. Ein deutsches Angebot braucht
     das, bevor der erste externe Kunde live geht — nicht danach.
-18. **Urheberrecht an Transkripten.** Der Kanalbetreiber importiert seine eigenen Videos:
+21. **Urheberrecht an Transkripten.** Der Kanalbetreiber importiert seine eigenen Videos:
     unproblematisch. Fremde Kanäle importieren: nicht. Der Import fremder Kanäle sollte
     technisch möglich, aber als privates Wiki voreingestellt und bei „öffentlich" mit einer
     Bestätigung der Rechtelage versehen sein.
-19. **AI-Kennzeichnung.** Generierte Artikel als solche markieren, samt Quelle und
+22. **AI-Kennzeichnung.** Generierte Artikel als solche markieren, samt Quelle und
     Generierungsdatum. Kostet nichts, schafft Vertrauen und deckt kommende
     Transparenzpflichten ab.
 
@@ -415,12 +493,29 @@ pg-boss + Worker-Container · Rate-Limits · Audit-Log.
 | **Rate-Limits** | **erledigt** — `middleware/rate-limit.ts` auf Import, Transkriptabruf, Chat und Generierung. Ausdrücklich Schutz gegen den eigenen Klick, noch keiner gegen Fremde: der Zähler liegt im Speicher und gehört in die Datenbank, sobald die API mehrfach läuft |
 | **Kostenzählung** (`usage_events`, KONZEPT 4.5) | **erledigt** — Tokens gemessen, Preise geschätzt, `GET /api/v1/usage/…`. Steht nicht in der Zeile oben, gehört aber vor Stufe 1: ohne sie ist der Kanal-Import ein Blindflug durchs Guthaben. **Seit 23. August auch sichtbar**: Reiter „💶 Kosten" je Wiki und Aufwandskasten je Dokument; Preise auf `deepseek-v4-*` samt Prompt-Cache und Stoßzeit umgestellt (die alte Tabelle kannte nur `deepseek-chat` und bewertete jeden Posten mit 0) |
 | **Mandantentrennung der LLM-Provider** | **erledigt am 21. August** — `service/provider.ts`. Vorher nahmen sechs Stellen „die erste aktive Zeile" ohne `organization_id`: mit zwei Mandanten wären Inhalte über den Schlüssel des anderen gelaufen. Dazu sind die Schlüssel jetzt wirklich verschlüsselt (`service/crypto.ts`) — die Spalte hieß `api_key_encrypted` und enthielt Klartext |
-| **Audit-Log** (`audit_events`) | **offen** — die Tabelle steht seit dem Livegang in `schema/tenancy.ts`, es schreibt sie **nichts**. Zu tun: Anmeldung, Rollenwechsel, Freigabe, Löschung. Der einzige verbliebene Punkt aus dieser Zeile |
+| **Audit-Log** (`audit_events`) | **erledigt am 6. September** — `service/audit.ts` schreibt die Tabelle, die seit dem Livegang leer stand. Protokolliert werden Anmeldung (erfolgreich **und** fehlgeschlagen), Rollenwechsel auf Organisations- wie Wiki-Ebene, Freigabe eines Verbunds und die Löschung von Seite, Dokument und Wiki. Die Anmeldung hängt am Entstehen der Sitzung, nicht an der Anmelderoute — sonst fehlten Verifikation und Erstanmeldung; Org-Rollen laufen über einen Nachlauf-Hook, weil sie nie an unseren Routern vorbeikommen. **Nicht enthalten:** eine Leseseite — das Protokoll ist heute nur per SQL einsehbar (siehe unten) |
+
+**Damit ist Stufe 0 nach der eigenen Liste abgeschlossen.** Zwei Vorbehalte bleiben
+ausdrücklich stehen, beide nicht Teil der Stufe-0-Zeile, beide vor Stufe 2 fällig:
+
+- Der **Rate-Limit-Zähler liegt im Prozessspeicher** (`middleware/rate-limit.ts`). Sobald
+  die API mehrfach läuft oder anonymer Chat dazukommt, zählt jeder Prozess für sich.
+- **Row-Level-Security auf `org_id` (4.1) ist nie gebaut worden.** Keine Migration enthält
+  `ENABLE ROW LEVEL SECURITY`. Das zweite Netz gegen einen vergessenen `where`-Filter
+  existiert bislang nur als Vorsatz.
+
+Dazu eine bewusste Auslassung beim Audit-Log: es gibt **keinen Endpunkt und keine Ansicht**,
+die es liest. Das ist keine vergessene Arbeit, sondern eine offene Entscheidung — wer ein
+Sicherheitsprotokoll lesen darf, ist eine Rechtefrage (`owner`? `admin`? nur der
+Betreiber?), und sie zu treffen gehört zur Mitgliederverwaltung in Stufe 3, nicht in einen
+Nachtrag zu Stufe 0.
 
 ### Stufe 1 — Kanal-Import in Serie
 `channel.sync` + `video.ingest` · YouTube Data API zum Backfill, RSS zur Fortschreibung ·
 `external_id` mit Unique-Index · `transcript_segments` mit Zeitmarken · Fortschritts-UI mit
-Wiederholen · Kostenvoranschlag und Zählung. **Prüfstein: Basta Berlin komplett, in einem
+Wiederholen · Kostenvoranschlag und Zählung · Redaktionsanweisung je Wiki (5.1/7) — sie
+gehört vor den ersten großen Lauf, weil ein Wiki aus 312 Videos im falschen Ton neu
+generiert werden müsste. **Prüfstein: Basta Berlin komplett, in einem
 Vorgang, wiederholbar.**
 
 ### Stufe 2 — Öffentliches Wiki
@@ -428,7 +523,8 @@ Nuxt-Lese-Seite · SEO/Sitemap/OG · öffentliche Suche · anonymer Chat mit Dec
 Custom Domains via Caddy · tiefe Video-Links · „Fehler melden".
 
 ### Stufe 3 — Redaktion & Team
-Einladungen · Freigabe-Workflow mit Diff · WYSIWYG · Analytics · Export.
+Einladungen · Freigabe-Workflow mit Diff · WYSIWYG · Analytics · Export als OKF-Bundle ·
+**Lint-Lauf (4.7) mit Redaktions-Inbox** · Änderungs-Chronik je Wiki.
 
 ### Stufe 4 — Produkt
 Tarife und Abrechnung · Mitglieder-Bereich · Widget · API und Webhooks · SSO/2FA für
@@ -460,6 +556,45 @@ Firmenkunden.
 
 4. **Getrennte Umgebungen und größere Hardware** vor dem ersten zahlenden Kunden —
    Dimensionierung, Anbietervergleich und Serverentscheidung in [HOSTING.md](./HOSTING.md).
+
+### Getroffen am 6. September 2026
+
+5. **Das Muster ist bestätigt, vier Ideen übernommen.** Anlass war
+   [Karpathys „LLM Wiki"](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
+   — dieselbe Grundthese wie hier: nicht RAG über Rohdokumente, sondern ein persistentes
+   Wiki als kompilierte Zwischenschicht, das bei jeder neuen Quelle fortgeschrieben statt neu
+   abgeleitet wird. Der Text beschreibt die Ein-Personen-Variante; alles, was prowiki zum
+   Produkt macht — Mandanten, Rechte, Sichtbarkeit, Kostenzählung, Queue, öffentliches Lesen
+   — fehlt dort naturgemäß. Übernommen wurden vier Punkte:
+
+   - **Lint-Lauf** als neuer Abschnitt 4.7. Die deutlichste Lücke: sein Ablauf hat bei jeder
+     Quelle einen Menschen in der Schleife, unser Kanal-Import hat keinen.
+   - **Redaktionsanweisung je Wiki** (5.1/7), bei ihm die Schema-Datei.
+   - **Änderungs-Chronik je Wiki** (5.1/8), bei ihm `log.md`.
+   - **Export als Markdown-Vault** statt als bloßes ZIP (5.1/4) — die Form dieses Exports
+     legt Entscheidung 6 fest.
+
+   Nicht übernommen: eine kuratierte Index-Datei statt Suche — das trägt bei seinen ~100
+   Quellen, nicht bei 5.703 Seiten; und die Disziplin, jede Quelle einzeln und unter Aufsicht
+   einzupflegen — das ist das Gegenteil des Prüfsteins von Stufe 1.
+
+6. **OKF nur an der Außenkante.** Googles
+   [Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing)
+   (v0.1, 12. Juni 2026) ist nicht ein weiteres Werkzeug, sondern die Standardisierung genau
+   des Musters aus Entscheidung 5 — der Text zitiert Karpathy ausdrücklich. Es ist ein
+   **Format, kein System**: ein Verzeichnis Markdown mit YAML-Frontmatter, eine Seite
+   Spezifikation, kein SDK, keine Laufzeit. Es kennt keine Mandanten, keine Rechte, keine
+   Sichtbarkeit, keine Revisionen, keine Kostenzählung, keine Suche und keine Generierung —
+   alles, was Abschnitt 4 ausmacht, hat dort kein Gegenstück. Damit ist es keine Konkurrenz
+   zu prowiki, sondern eine Transportform.
+
+   **Entschieden:** der Export (5.1/4) wird OKF-konform und bleibt dabei Obsidian-taugliches
+   Markdown; der Import eines OKF-Bundles ist als Quellenart vorgemerkt (5.3/17). **Nicht**
+   entschieden und ausdrücklich abgelehnt: OKF als internes Datenmodell und die
+   Index-first-Navigation der Spezifikation. Begründung: die Anpassung am Rand kostet
+   gegenüber dem ohnehin geplanten Export fast nichts und ist zurücknehmbar, falls der
+   Standard nicht ankommt — eine Wette auf v0.1 eines einzigen Anbieters im Kern der
+   Anwendung wäre sie nicht.
 
 ### Abschaltkriterium für knora
 
