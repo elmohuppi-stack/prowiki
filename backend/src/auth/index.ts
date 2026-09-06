@@ -163,63 +163,78 @@ export const auth = betterAuth({
    * Protokoll, das Änderungen nachweisen soll.
    */
   hooks: {
+    /**
+     * Alles hierin ist Protokoll, nichts davon ist die eigentliche Arbeit —
+     * und dieser Hook läuft auf **jeder** Auth-Route, auch auf `/get-session`,
+     * das die Oberfläche laufend aufruft. Ein Nachlauf-Hook, der wirft, reißt
+     * die Route mit, an der er hängt; das wären hier Anmeldung und
+     * Sitzungsprüfung. Ein Fehler beim Protokollieren darf niemanden
+     * aussperren, deshalb fängt der ganze Block selbst ab.
+     */
     after: createAuthMiddleware(async (ctx) => {
-      const gescheitert = isAPIError(ctx.context.returned);
-      const körper = (ctx.body ?? {}) as Record<string, unknown>;
-      const text = (wert: unknown): string | null =>
-        typeof wert === "string" && wert.length > 0 ? wert : null;
+      try {
+        const gescheitert = isAPIError(ctx.context.returned);
+        const körper = (ctx.body ?? {}) as Record<string, unknown>;
+        const text = (wert: unknown): string | null =>
+          typeof wert === "string" && wert.length > 0 ? wert : null;
 
-      if (ctx.path === "/sign-in/email") {
-        if (!gescheitert) return; // Erfolg steht schon über den Sitzungs-Hook drin.
-        const { ip, userAgent } = herkunft(ctx.headers ?? new Headers());
-        await protokolliere({
-          action: AUDIT.anmeldungFehlgeschlagen,
-          actorEmail: text(körper.email),
-          details: {
-            grund:
-              (ctx.context.returned as { message?: string } | undefined)
-                ?.message ?? "unbekannt",
-          },
-          ip,
-          userAgent,
-        });
-        return;
-      }
+        if (ctx.path === "/sign-in/email") {
+          // Der Erfolg steht bereits über den Sitzungs-Hook im Protokoll.
+          if (!gescheitert) return;
+          await protokolliere({
+            action: AUDIT.anmeldungFehlgeschlagen,
+            actorEmail: text(körper.email),
+            details: {
+              grund:
+                (ctx.context.returned as { message?: string } | undefined)
+                  ?.message ?? "unbekannt",
+            },
+            ...herkunft(ctx.headers ?? new Headers()),
+          });
+          return;
+        }
 
-      if (gescheitert) return;
+        // Pfad zuerst, Sitzung danach: bei jedem anderen Aufruf ist hier
+        // Schluss, ohne dass irgendetwas angefasst wurde.
+        if (
+          ctx.path !== "/organization/update-member-role" &&
+          ctx.path !== "/organization/remove-member"
+        ) {
+          return;
+        }
+        // Ein abgewiesener Versuch hat nichts geändert und gehört nicht in ein
+        // Protokoll, das Änderungen nachweisen soll.
+        if (gescheitert) return;
 
-      const sitzung = ctx.context.session;
-      if (!sitzung) return;
-      const orgId =
-        text(körper.organizationId) ??
-        sitzung.session.activeOrganizationId ??
-        null;
-      const { ip, userAgent } = herkunft(ctx.headers ?? new Headers());
-      const gemeinsam = {
-        organizationId: orgId,
-        actorId: sitzung.user.id,
-        actorEmail: sitzung.user.email,
-        targetType: "member",
-        ip,
-        userAgent,
-      };
+        const sitzung = ctx.context.session;
+        if (!sitzung?.user) return;
+        const gemeinsam = {
+          organizationId:
+            text(körper.organizationId) ??
+            text(sitzung.session?.activeOrganizationId),
+          actorId: sitzung.user.id,
+          actorEmail: sitzung.user.email,
+          targetType: "member",
+          ...herkunft(ctx.headers ?? new Headers()),
+        };
 
-      if (ctx.path === "/organization/update-member-role") {
-        await protokolliere({
-          ...gemeinsam,
-          action: AUDIT.orgRolleGeändert,
-          targetId: text(körper.memberId),
-          details: { rolle: körper.role },
-        });
-        return;
-      }
+        if (ctx.path === "/organization/update-member-role") {
+          await protokolliere({
+            ...gemeinsam,
+            action: AUDIT.orgRolleGeändert,
+            targetId: text(körper.memberId),
+            details: { rolle: körper.role },
+          });
+          return;
+        }
 
-      if (ctx.path === "/organization/remove-member") {
         await protokolliere({
           ...gemeinsam,
           action: AUDIT.orgMitgliedEntfernt,
           targetId: text(körper.memberIdOrEmail),
         });
+      } catch (fehler) {
+        console.error("[audit] Auth-Ereignis nicht protokolliert:", fehler);
       }
     }),
   },
