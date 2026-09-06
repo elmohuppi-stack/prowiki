@@ -12,3 +12,7 @@ dist/
 # Containers — damit stand nach jedem Lauf eine fremde Änderung in git status.
 __pycache__/
 *.pyc
+
+# Laufzeitzustand des Agentenwerkzeugs (leere Snapshots, Sperrdateien). Ändert
+# sich bei jedem Lauf und gehört niemandem außer der lokalen Sitzung.
+.codewhale/
