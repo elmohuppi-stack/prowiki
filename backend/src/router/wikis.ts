@@ -18,6 +18,7 @@ import {
 import { ROLE_NAMES, type RoleName } from "../auth/permissions.ts";
 import { WIKI_VISIBILITIES } from "../db/schema.ts";
 import * as wikiService from "../service/wikis.ts";
+import { AUDIT, protokolliere, herkunft } from "../service/audit.ts";
 
 const wikisRouter = new Hono();
 
@@ -187,8 +188,22 @@ wikisRouter.put(
 
 wikisRouter.delete("/:id", requireUser, async (c) => {
   const id = c.req.param("id");
-  await requireWikiCapability(c.get("principal"), id, "wiki.delete");
+  const principal = c.get("principal");
+  const zugriff = await requireWikiCapability(principal, id, "wiki.delete");
+  // Name vor dem Löschen lesen: danach ist die Zeile weg, und ein Protokoll,
+  // das nur eine UUID nennt, beantwortet die Frage „welches Wiki?" nicht mehr.
+  const wiki = await wikiService.getWiki(id);
   await wikiService.deleteWiki(id);
+  await protokolliere({
+    action: AUDIT.wikiGelöscht,
+    organizationId: zugriff.organizationId,
+    actorId: principal.userId,
+    actorEmail: principal.email,
+    targetType: "wiki",
+    targetId: id,
+    details: { name: wiki?.name ?? null, slug: wiki?.slug ?? null },
+    ...herkunft(c.req),
+  });
   return c.json({ success: true });
 });
 
@@ -217,6 +232,16 @@ wikisRouter.put(
 
     const { user_id, role } = c.req.valid("json");
     const row = await wikiService.setMemberRole(id, user_id, role);
+    await protokolliere({
+      action: AUDIT.wikiRolleGesetzt,
+      organizationId: wiki.organization_id,
+      actorId: principal.userId,
+      actorEmail: principal.email,
+      targetType: "user",
+      targetId: user_id,
+      details: { wiki_id: id, rolle: role },
+      ...herkunft(c.req),
+    });
     return c.json({ member: row }, 201);
   },
 );
@@ -228,7 +253,18 @@ wikisRouter.delete("/:id/members/:userId", requireUser, async (c) => {
   if (!wiki) return c.json({ error: "Wiki nicht gefunden" }, 404);
   await requireOrgCapability(principal, wiki.organization_id, "member.update");
 
-  await wikiService.removeMember(id, c.req.param("userId"));
+  const userId = c.req.param("userId");
+  await wikiService.removeMember(id, userId);
+  await protokolliere({
+    action: AUDIT.wikiRolleEntfernt,
+    organizationId: wiki.organization_id,
+    actorId: principal.userId,
+    actorEmail: principal.email,
+    targetType: "user",
+    targetId: userId,
+    details: { wiki_id: id },
+    ...herkunft(c.req),
+  });
   return c.json({ success: true });
 });
 

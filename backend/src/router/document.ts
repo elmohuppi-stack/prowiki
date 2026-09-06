@@ -19,6 +19,7 @@ import { logActivity, updateLog } from "../service/activity-log.ts";
 import { QUEUE, enqueue } from "../jobs/queue.ts";
 import { spoolSchreiben } from "../jobs/spool.ts";
 import { LIMITS } from "../middleware/rate-limit.ts";
+import { AUDIT, protokolliere, herkunft } from "../service/audit.ts";
 import * as topicService from "../service/topic.ts";
 import { wählbareProvider } from "../service/provider.ts";
 
@@ -559,8 +560,26 @@ documentRouter.post(
 // Dokument löschen
 documentRouter.delete("/:id", async (c) => {
   const id = c.req.param("id");
-  await requireDocumentCapability(c.get("principal"), id, "wiki.write");
+  const principal = c.get("principal");
+  const { access, wikiId } = await requireDocumentCapability(
+    principal,
+    id,
+    "wiki.write",
+  );
+  // Titel vor dem Löschen lesen — mit dem Dokument gehen Chunks, Embeddings
+  // und Transkriptsegmente, und eine UUID allein sagt hinterher nicht, was weg ist.
+  const dokument = await documentService.getDocument(id);
   await documentService.deleteDocument(id);
+  await protokolliere({
+    action: AUDIT.dokumentGelöscht,
+    organizationId: access.organizationId,
+    actorId: principal?.userId ?? null,
+    actorEmail: principal?.email ?? null,
+    targetType: "document",
+    targetId: id,
+    details: { wiki_id: wikiId, titel: dokument?.title ?? null },
+    ...herkunft(c.req),
+  });
   return c.json({ success: true });
 });
 

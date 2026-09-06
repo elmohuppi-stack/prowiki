@@ -7,6 +7,7 @@ import * as wikiService from "../service/wiki.ts";
 import * as activityLog from "../service/activity-log.ts";
 import { QUEUE, enqueue } from "../jobs/queue.ts";
 import { LIMITS } from "../middleware/rate-limit.ts";
+import { AUDIT, protokolliere, herkunft } from "../service/audit.ts";
 
 const pageRouter = new Hono();
 pageRouter.use("*", sessionMiddleware);
@@ -192,6 +193,19 @@ pageRouter.post("/:wikiId/clusters/:clusterId/publish", async (c) => {
   const wikiId = c.req.param("wikiId");
   const clusterId = c.req.param("clusterId");
   const count = await wikiService.publishCluster(wikiId, clusterId);
+  const principal = c.get("principal");
+  await protokolliere({
+    action: AUDIT.freigabe,
+    organizationId: c.get("wikiAccess").organizationId,
+    actorId: principal?.userId ?? null,
+    actorEmail: principal?.email ?? null,
+    targetType: "cluster",
+    targetId: clusterId,
+    // Die Zahl ist der Punkt: eine Freigabe über 40 Seiten ist ein anderer
+    // Vorgang als eine über eine, und im Nachhinein nicht rekonstruierbar.
+    details: { wiki_id: wikiId, seiten: count },
+    ...herkunft(c.req),
+  });
   return c.json({ published: count });
 });
 
@@ -309,6 +323,17 @@ pageRouter.delete("/:wikiId/pages/:slug", async (c) => {
   const wikiId = c.req.param("wikiId");
   const slug = decodeURIComponent(c.req.param("slug"));
   await wikiService.deletePage(wikiId, slug);
+  const principal = c.get("principal");
+  await protokolliere({
+    action: AUDIT.seiteGelöscht,
+    organizationId: c.get("wikiAccess").organizationId,
+    actorId: principal?.userId ?? null,
+    actorEmail: principal?.email ?? null,
+    targetType: "page",
+    targetId: slug,
+    details: { wiki_id: wikiId },
+    ...herkunft(c.req),
+  });
   return c.json({ success: true });
 });
 

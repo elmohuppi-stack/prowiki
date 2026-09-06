@@ -16,11 +16,14 @@
  */
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { createAuthMiddleware, isAPIError } from "better-auth/api";
 import { organization } from "better-auth/plugins";
+import { eq } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import * as schema from "../db/schema.ts";
 import { ac, roles } from "./permissions.ts";
 import { sendeMail, resetMail, verifikationsMail } from "../service/mail.ts";
+import { AUDIT, protokolliere, herkunft } from "../service/audit.ts";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -95,6 +98,130 @@ export const auth = betterAuth({
     expiresIn: 60 * 60 * 24 * 30,
     updateAge: 60 * 60 * 24,
     cookieCache: { enabled: true, maxAge: 5 * 60 },
+  },
+
+  /**
+   * Anmeldungen ins Sicherheitsprotokoll (service/audit.ts).
+   *
+   * Warum am Entstehen der Sitzung und nicht an der Route `/sign-in/email`:
+   * eine Sitzung entsteht auch nach der Mail-Verifikation
+   * (`autoSignInAfterVerification`) und beim Bootstrap-Konto. Wer nur die
+   * Anmelderoute beobachtet, verpasst ausgerechnet die erste Benutzung eines
+   * neuen Kontos.
+   *
+   * Die Sitzungszeile führt IP und User-Agent bereits mit (schema/auth.ts) —
+   * beides muss hier nicht aus Kopfzeilen geraten werden.
+   */
+  databaseHooks: {
+    session: {
+      create: {
+        async after(sitzung) {
+          try {
+            const [konto] = await db
+              .select({ email: schema.user.email })
+              .from(schema.user)
+              .where(eq(schema.user.id, sitzung.userId))
+              .limit(1);
+            await protokolliere({
+              action: AUDIT.anmeldung,
+              // Better Auth typisiert Zusatzfelder der Sitzung als `{}`; beim
+              // ersten Login ist noch keine Organisation gewählt.
+              organizationId:
+                typeof sitzung.activeOrganizationId === "string"
+                  ? sitzung.activeOrganizationId
+                  : null,
+              actorId: sitzung.userId,
+              actorEmail: konto?.email ?? null,
+              targetType: "session",
+              targetId: sitzung.id,
+              ip: sitzung.ipAddress ?? null,
+              userAgent: sitzung.userAgent ?? null,
+            });
+          } catch (fehler) {
+            // Eine Anmeldung darf nicht daran scheitern, dass sie sich nicht
+            // protokollieren ließ. Siehe Kopf von service/audit.ts.
+            console.error("[audit] Anmeldung nicht protokolliert:", fehler);
+          }
+        },
+      },
+    },
+  },
+
+  /**
+   * Fehlgeschlagene Anmeldungen und Rollenwechsel auf Organisationsebene.
+   *
+   * Diese beiden gehen nur hier: Mitgliederverwaltung läuft vollständig über
+   * die Endpunkte des `organization`-Plugins (`/api/auth/organization/*`) und
+   * kommt nie an unseren eigenen Routern vorbei. Der Nachlauf-Hook ist der
+   * einzige Punkt, an dem prowiki davon erfährt.
+   *
+   * `ctx.context.returned` ist bei einem abgewiesenen Aufruf der `APIError` —
+   * daran hängt die Unterscheidung zwischen „Rolle geändert" und „Versuch,
+   * eine Rolle zu ändern, abgelehnt". Protokolliert wird der Fehlschlag nur
+   * bei der Anmeldung: dort ist die Reihe der Versuche das Signal. Eine
+   * abgelehnte Rollenänderung hat nichts geändert und gehört nicht in ein
+   * Protokoll, das Änderungen nachweisen soll.
+   */
+  hooks: {
+    after: createAuthMiddleware(async (ctx) => {
+      const gescheitert = isAPIError(ctx.context.returned);
+      const körper = (ctx.body ?? {}) as Record<string, unknown>;
+      const text = (wert: unknown): string | null =>
+        typeof wert === "string" && wert.length > 0 ? wert : null;
+
+      if (ctx.path === "/sign-in/email") {
+        if (!gescheitert) return; // Erfolg steht schon über den Sitzungs-Hook drin.
+        const { ip, userAgent } = herkunft(ctx.headers ?? new Headers());
+        await protokolliere({
+          action: AUDIT.anmeldungFehlgeschlagen,
+          actorEmail: text(körper.email),
+          details: {
+            grund:
+              (ctx.context.returned as { message?: string } | undefined)
+                ?.message ?? "unbekannt",
+          },
+          ip,
+          userAgent,
+        });
+        return;
+      }
+
+      if (gescheitert) return;
+
+      const sitzung = ctx.context.session;
+      if (!sitzung) return;
+      const orgId =
+        text(körper.organizationId) ??
+        sitzung.session.activeOrganizationId ??
+        null;
+      const { ip, userAgent } = herkunft(ctx.headers ?? new Headers());
+      const gemeinsam = {
+        organizationId: orgId,
+        actorId: sitzung.user.id,
+        actorEmail: sitzung.user.email,
+        targetType: "member",
+        ip,
+        userAgent,
+      };
+
+      if (ctx.path === "/organization/update-member-role") {
+        await protokolliere({
+          ...gemeinsam,
+          action: AUDIT.orgRolleGeändert,
+          targetId: text(körper.memberId),
+          details: { rolle: körper.role },
+        });
+        return;
+      }
+
+      if (ctx.path === "/organization/remove-member") {
+        await protokolliere({
+          ...gemeinsam,
+          action: AUDIT.orgMitgliedEntfernt,
+          targetId: text(körper.memberIdOrEmail),
+        });
+      }
+    }),
   },
 
   advanced: {
