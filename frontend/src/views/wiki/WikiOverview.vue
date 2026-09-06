@@ -80,7 +80,9 @@
                 p.title
               }}</router-link>
               <span v-if="p.summary" class="summary">{{ kurz(p.summary) }}</span>
-              <span class="zahlen">{{ kennzahl(p) }}</span>
+              <span class="zahlen" :class="{ tot: totBelegt(p) }">{{
+                kennzahl(p)
+              }}</span>
             </li>
           </ul>
         </section>
@@ -98,7 +100,9 @@
             }}</router-link>
             <span v-if="p.summary" class="summary">{{ kurz(p.summary) }}</span>
           </span>
-          <span class="zahlen">{{ kennzahl(p) }}</span>
+          <span class="zahlen" :class="{ tot: totBelegt(p) }">{{
+            kennzahl(p)
+          }}</span>
         </li>
       </ol>
     </template>
@@ -122,6 +126,7 @@ interface Seite {
   in_count: number;
   out_count: number;
   belege: number;
+  belege_da: number;
   quellen: number;
   bucket: string;
 }
@@ -252,13 +257,26 @@ function kurz(text: string): string {
 function kennzahl(p: Seite): string {
   const teile = [`← ${p.in_count}`, `→ ${p.out_count}`];
   if (p.belege) {
-    teile.push(
-      p.quellen > 1
-        ? `${p.belege} Belege / ${p.quellen} Quellen`
-        : `${p.belege} Belege`,
-    );
+    if (p.belege_da === 0) {
+      // Die Seite beruft sich auf Chunks, die es nicht mehr gibt. „5 Belege"
+      // wäre hier schlicht falsch.
+      teile.push(`${p.belege} Belege, keiner auffindbar`);
+    } else if (p.belege_da < p.belege) {
+      teile.push(`${p.belege_da} von ${p.belege} Belegen auffindbar`);
+    } else {
+      teile.push(
+        p.quellen > 1
+          ? `${p.belege} Belege / ${p.quellen} Quellen`
+          : `${p.belege} Belege`,
+      );
+    }
   }
   return teile.join("  ·  ");
+}
+
+/** Seite beruft sich ausschließlich auf Verweise, die ins Leere zeigen. */
+function totBelegt(p: Seite): boolean {
+  return p.belege > 0 && p.belege_da === 0;
 }
 </script>
 
@@ -426,6 +444,10 @@ function kennzahl(p: Seite): string {
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.zahlen.tot {
+  color: #c2410c;
 }
 
 .empty {

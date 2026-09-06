@@ -398,6 +398,12 @@ export async function pageOverview(
                    jsonb_array_length(${wikiPages.out_links}) desc,
                    ${SORTIERTITEL} asc`;
       case "evidence":
+        // Sortiert wird über die Zahl der *Verweise*, nicht über die der noch
+        // auffindbaren: letzteres hieße, die korrelierte Unterabfrage über den
+        // ganzen Bestand statt über eine Seite laufen zu lassen. Die Anzeige
+        // nennt beide Zahlen, sobald sie auseinandergehen — der richtige Weg
+        // aus dem Unterschied ist, die toten Verweise aufzuräumen, nicht um sie
+        // herumzusortieren.
         return sql`jsonb_array_length(${wikiPages.chunk_refs}) desc,
                    ${SORTIERTITEL} asc`;
       // Waisen alphabetisch: sie sind eine Arbeitsliste, keine Rangliste.
@@ -420,6 +426,21 @@ export async function pageOverview(
       out_count: sql<number>`jsonb_array_length(${wikiPages.out_links})`,
       /** Belegstellen — Chunks, auf die sich die Seite beruft. */
       belege: sql<number>`jsonb_array_length(${wikiPages.chunk_refs})`,
+      /**
+       * Wie viele dieser Verweise es überhaupt noch gibt.
+       *
+       * Der Unterschied ist nicht theoretisch: am 6. September standen von
+       * 2.972 Konzeptseiten in der Produktion 1.200 auf ausschließlich toten
+       * Verweisen und 200 auf teilweise toten — ein erneutes Chunking legt neue
+       * Chunk-IDs an, `chunk_refs` der Seite zeigt danach ins Leere. Ohne diese
+       * Spalte behauptet die Belegdecke Belege, die niemand mehr aufschlagen
+       * kann.
+       */
+      belege_da: sql<number>`(
+        select count(*)::int
+          from ${chunks} c
+         where c.id in (select jsonb_array_elements_text(${wikiPages.chunk_refs}))
+      )`,
       /**
        * Wie viele verschiedene Quelldokumente diese Belege abdecken. Zehn
        * Belege aus einem Video sagen weniger als drei aus drei Videos.
@@ -460,6 +481,7 @@ export async function pageOverview(
       in_count: Number(r.in_count || 0),
       out_count: Number(r.out_count || 0),
       belege: Number(r.belege || 0),
+      belege_da: Number(r.belege_da || 0),
       quellen: Number(r.quellen || 0),
     })),
     total: Number(countResult?.count || 0),
