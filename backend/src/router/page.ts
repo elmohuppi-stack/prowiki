@@ -415,6 +415,32 @@ pageRouter.get("/:wikiId/index", async (c) => {
 });
 
 // Seiten nach Typ (paginierte Liste für Tab-Bar)
+/**
+ * Übersicht über den Bestand eines Seitentyps (Reiter „Verzeichnis").
+ *
+ * `type` ist absichtlich vorbelegt: die Frage, die dieser Endpunkt beantwortet,
+ * stellt man in aller Regel zu den Konzepten — sie sind das, was das Wiki über
+ * seine Quellen hinaus behauptet.
+ */
+pageRouter.get("/:wikiId/overview", async (c) => {
+  const wikiId = c.req.param("wikiId");
+  const view = c.req.query("view") || "alpha";
+  const erlaubt = ["alpha", "connections", "evidence", "orphans"] as const;
+  if (!erlaubt.includes(view as (typeof erlaubt)[number])) {
+    return c.json({ error: `Unbekannte Sicht: ${view}` }, 400);
+  }
+
+  // `all` hebt den Typfilter auf — sonst käme man an der Vorbelegung nie vorbei.
+  const typ = c.req.query("type") || "concept";
+  const result = await wikiService.pageOverview(wikiId, {
+    page_type: typ === "all" ? undefined : typ,
+    view: view as wikiService.OverviewView,
+    page: parseInt(c.req.query("page") || "1"),
+    page_size: parseInt(c.req.query("page_size") || "200"),
+  });
+  return c.json(result);
+});
+
 pageRouter.get("/:wikiId/pages-by-type", async (c) => {
   const wikiId = c.req.param("wikiId");
   const type = c.req.query("type") || "";

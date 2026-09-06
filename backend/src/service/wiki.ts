@@ -305,6 +305,169 @@ export async function topConcepts(wikiId: string, limit = 20) {
   return rows.map((r) => ({ ...r, connections: Number(r.connections || 0) }));
 }
 
+// --- Übersichten ------------------------------------------------------------
+
+/**
+ * Vollständige Sichten auf den Bestand eines Seitentyps.
+ *
+ * ## Warum das nicht `listPages` mit anderem Sort ist
+ *
+ * `listPages` beantwortet „welche Seiten passen zu meinem Filter" und liefert
+ * dafür die ganze Seitenzeile samt `content`. Eine Übersicht beantwortet die
+ * umgekehrte Frage — „was steht hier eigentlich alles drin" — und braucht dafür
+ * keine Inhalte, sondern **Kennzahlen**: wie vernetzt ist eine Seite, wie gut
+ * belegt, hängt sie überhaupt am Rest. Die Zeilen sind damit klein genug, dass
+ * ein Wiki mit ein paar hundert Konzepten in einem Zug lesbar ist.
+ *
+ * ## Vier Sichten, vier Fragen
+ *
+ *   - `alpha`       Das vollständige Verzeichnis. Langweilig und unverzichtbar:
+ *                   der Rückfall, wenn keine der klugen Ordnungen hilft.
+ *   - `connections` Worum es in diesem Wiki geht — im Unterschied dazu, was
+ *                   drinsteht. Die Naben oben sind die Achsen des Materials.
+ *   - `evidence`    Was trägt und was ein Stummel ist. Redaktionell die
+ *                   nützlichste Ordnung: ein Konzept mit 40 Belegen aus 12
+ *                   Quellen ist etabliert, eines mit einem Beleg ist meist ein
+ *                   Artefakt einer einzelnen Quelle.
+ *   - `orphans`     Keine Ordnung, sondern ein **Filter**: Seiten, auf die
+ *                   niemand verweist. Findet Defekte statt Inhalte und ist der
+ *                   erste konkrete Teil des Lint-Laufs (KONZEPT 4.7).
+ *
+ * Entwürfe bleiben überall draußen — dieselbe Regel wie in `topConcepts`.
+ */
+export type OverviewView = "alpha" | "connections" | "evidence" | "orphans";
+
+/**
+ * Obergrenze eigens für Übersichten, höher als `MAX_PAGE_SIZE`.
+ *
+ * Vertretbar, weil hier weder `content` noch `out_links`/`in_links` selbst
+ * ausgeliefert werden, sondern nur deren Länge: 500 Übersichtszeilen wiegen
+ * weniger als 50 vollständige Seiten. Eine Übersicht, die man durchblättern
+ * muss, ist außerdem keine.
+ */
+const MAX_OVERVIEW_SIZE = 500;
+
+/**
+ * Sortierschlüssel der alphabetischen Sicht.
+ *
+ * Umlaute werden auf ihren Grundbuchstaben abgebildet, damit „Ärger" unter A
+ * steht und nicht hinter Z. Bewusst in SQL und nicht im Frontend: sonst
+ * sortiert die Datenbank nach der einen Regel und die Oberfläche gruppiert nach
+ * einer anderen, und die Liste springt. `translate` bildet Zeichen auf Zeichen
+ * ab — die beiden Zeichenketten müssen daher gleich lang bleiben (7 zu 7).
+ */
+const SORTIERTITEL = sql`lower(translate(${wikiPages.title}, 'ÄÖÜäöüß', 'AOUaous'))`;
+
+export async function pageOverview(
+  wikiId: string,
+  options?: {
+    page_type?: string;
+    view?: OverviewView;
+    page?: number;
+    page_size?: number;
+  },
+) {
+  const view: OverviewView = options?.view ?? "alpha";
+  const page = Math.max(1, options?.page || 1);
+  const pageSize = Math.min(
+    Math.max(1, options?.page_size || 200),
+    MAX_OVERVIEW_SIZE,
+  );
+
+  let conditions = and(
+    eq(wikiPages.wiki_id, wikiId),
+    ne(wikiPages.status, "draft"),
+  )!;
+  if (options?.page_type) {
+    conditions = and(conditions, eq(wikiPages.page_type, options.page_type))!;
+  }
+  if (view === "orphans") {
+    conditions = and(
+      conditions,
+      sql`jsonb_array_length(${wikiPages.in_links}) = 0`,
+    )!;
+  }
+
+  const orderBy = (() => {
+    switch (view) {
+      case "connections":
+        // Eingehende Links zuerst: worauf verwiesen wird, ist eine Nabe.
+        // Ausgehende als zweiter Schlüssel, damit die Reihenfolge bei
+        // Gleichstand nicht zufällig ist.
+        return sql`jsonb_array_length(${wikiPages.in_links}) desc,
+                   jsonb_array_length(${wikiPages.out_links}) desc,
+                   ${SORTIERTITEL} asc`;
+      case "evidence":
+        return sql`jsonb_array_length(${wikiPages.chunk_refs}) desc,
+                   ${SORTIERTITEL} asc`;
+      // Waisen alphabetisch: sie sind eine Arbeitsliste, keine Rangliste.
+      case "orphans":
+      case "alpha":
+      default:
+        return sql`${SORTIERTITEL} asc`;
+    }
+  })();
+
+  const rows = await db
+    .select({
+      id: wikiPages.id,
+      slug: wikiPages.slug,
+      title: wikiPages.title,
+      summary: wikiPages.summary,
+      page_type: wikiPages.page_type,
+      updated_at: wikiPages.updated_at,
+      in_count: sql<number>`jsonb_array_length(${wikiPages.in_links})`,
+      out_count: sql<number>`jsonb_array_length(${wikiPages.out_links})`,
+      /** Belegstellen — Chunks, auf die sich die Seite beruft. */
+      belege: sql<number>`jsonb_array_length(${wikiPages.chunk_refs})`,
+      /**
+       * Wie viele verschiedene Quelldokumente diese Belege abdecken. Zehn
+       * Belege aus einem Video sagen weniger als drei aus drei Videos.
+       *
+       * Korrelierte Unterabfrage, absichtlich: sie läuft nur über die Zeilen
+       * der ausgelieferten Seite und trifft `chunks` über den Primärschlüssel.
+       * Nach ihr wird nicht sortiert — das ginge über den ganzen Bestand und
+       * wäre der teure Fall.
+       */
+      quellen: sql<number>`(
+        select count(distinct c.document_id)::int
+          from ${chunks} c
+         where c.id in (select jsonb_array_elements_text(${wikiPages.chunk_refs}))
+      )`,
+      /**
+       * Buchstabengruppe für das Verzeichnis. Alles, was nicht mit einem
+       * Buchstaben beginnt (Zahlen, Anführungszeichen), landet unter „#".
+       */
+      bucket: sql<string>`case when left(${SORTIERTITEL}, 1) ~ '^[a-z]'
+                               then upper(left(${SORTIERTITEL}, 1))
+                               else '#' end`,
+    })
+    .from(wikiPages)
+    .where(conditions)
+    .orderBy(orderBy)
+    .limit(pageSize)
+    .offset((page - 1) * pageSize);
+
+  const [countResult] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(wikiPages)
+    .where(conditions);
+
+  return {
+    view,
+    pages: rows.map((r) => ({
+      ...r,
+      in_count: Number(r.in_count || 0),
+      out_count: Number(r.out_count || 0),
+      belege: Number(r.belege || 0),
+      quellen: Number(r.quellen || 0),
+    })),
+    total: Number(countResult?.count || 0),
+    page,
+    page_size: pageSize,
+  };
+}
+
 /**
  * Graph-Daten (Graph-Tab). „Erst fokussieren, dann zeichnen": ohne Fokus werden
  * nur die meistverlinkten Konzepte als Einstiegs-Wolke geliefert; mit Fokus der

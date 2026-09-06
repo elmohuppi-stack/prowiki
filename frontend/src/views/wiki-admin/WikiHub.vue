@@ -36,6 +36,12 @@
         >📖 Wiki</router-link
       >
       <router-link
+        :to="`/wikis/${wikiId}/index`"
+        class="tab"
+        :class="{ active: activeTab === 'index' }"
+        >🗂️ Verzeichnis</router-link
+      >
+      <router-link
         :to="`/wikis/${wikiId}/graph`"
         class="tab"
         :class="{ active: activeTab === 'graph' }"

@@ -59,6 +59,12 @@ const router = createRouter({
           component: () => import("../views/wiki/WikiBrowser.vue"),
         },
         {
+          // Verzeichnis: der Bestand im Überblick, in vier Sichten.
+          path: "index",
+          name: "WikiOverview",
+          component: () => import("../views/wiki/WikiOverview.vue"),
+        },
+        {
           path: "graph",
           name: "WikiGraph",
           component: () => import("../views/wiki/GraphView.vue"),
