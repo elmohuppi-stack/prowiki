@@ -78,6 +78,46 @@ export function extractVideoId(url: string): string | null {
 }
 
 /**
+ * Sprache, in der das Transkript angefragt wird.
+ *
+ * Sie kommt aus `wiki_config.wiki_language` — derselben Einstellung, aus der
+ * auch die Artikelgenerierung ihre Sprache nimmt (wiki-generate.ts). Vorher
+ * griff hier still der Vorgabewert der Providersignatur, also immer "de".
+ *
+ * Das blieb folgenlos, solange kein Actor die Sprache beachtete. Mit
+ * johnvc/YoutubeTranscripts ist es tragend: der Actor nimmt `languages` als
+ * Prioritätsliste ernst, ein englischsprachiges Wiki hätte also die deutsche
+ * Spur angefragt — und bei einem englischen Video im Zweifel eine
+ * Übersetzung erhalten statt des Originals.
+ *
+ * Der Rückfall ist "de" wie in wiki-generate.ts, damit Transkript und Artikel
+ * nicht auseinanderlaufen. Ein Fehler beim Lesen der Konfiguration darf den
+ * Import nicht aufhalten: eine unpassende Sprache ist schlimmer als keine
+ * Konfiguration, aber besser als ein abgebrochener Abruf.
+ */
+async function transkriptSprache(wikiId?: string): Promise<string> {
+  if (!wikiId) return "de";
+  try {
+    const [{ db }, { wikis }, { eq }] = await Promise.all([
+      import("../db/index.ts"),
+      import("../db/schema.ts"),
+      import("drizzle-orm"),
+    ]);
+    const [w] = await db
+      .select({ config: wikis.wiki_config })
+      .from(wikis)
+      .where(eq(wikis.id, wikiId))
+      .limit(1);
+    return w?.config?.wiki_language || "de";
+  } catch (e: any) {
+    console.warn(
+      `[youtube] Wiki-Sprache nicht lesbar (${e?.message}) – nutze "de"`,
+    );
+    return "de";
+  }
+}
+
+/**
  * Ruft Metadaten + Transkript für ein YouTube-Video ab.
  * Nutzt den konfigurierten Provider (Apify → Supadata → Direktzugriff).
  *
@@ -104,12 +144,20 @@ export async function fetchYouTubeInfo(
 ): Promise<YouTubeInfo | null> {
   const provider = getProvider();
 
+  const sprache = await transkriptSprache(wikiId);
+
   console.log(`[youtube] ========== fetchYouTubeInfo START ==========`);
   console.log(`[youtube] Video ID: ${videoId}`);
   console.log(`[youtube] Provider: ${provider.name}`);
+  console.log(
+    `[youtube] Sprache: ${sprache}${wikiId ? "" : " (kein Wiki – Vorgabe)"}`,
+  );
   const t0 = Date.now();
 
-  const { metadata, transcript } = await provider.fetchVideoInfo(videoId);
+  const { metadata, transcript } = await provider.fetchVideoInfo(
+    videoId,
+    sprache,
+  );
 
   // Gezählt wird der **Abruf**, nicht der Erfolg: ein Anbieter, der nichts
   // liefert, hat trotzdem abgerechnet. Genau deshalb steht der Aufruf hier und

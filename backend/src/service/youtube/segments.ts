@@ -271,6 +271,10 @@ export function extractSegments(
   durationSec?: number,
 ): TranscriptSegment[] {
   const ARRAY_FELDER = [
+    // `timestamped` führt johnvc/YoutubeTranscripts: Einträge der Form
+    // { text, start: 0.32, duration: 4.72 } — Sekunden mit Nachkommastellen,
+    // die istInMillisekunden an genau diesen Bruchteilen erkennt.
+    "timestamped",
     "segments",
     "transcript_segments",
     "transcriptSegments",

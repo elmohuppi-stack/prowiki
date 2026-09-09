@@ -165,14 +165,26 @@ export function istStoßzeit(zeitpunkt: Date): boolean {
  * Was ein Transkriptabruf kostet, in Millionstel Euro.
  *
  * Nicht in `PREISE`, weil hier nicht nach Tokens abgerechnet wird, sondern je
- * Video. Der Vorgabewert entspricht rund 0,04 € — die Größenordnung der
- * Apify-Actors für YouTube-Transkripte. Konfigurierbar, weil der Preis vom
- * gewählten Actor abhängt und keine Zahl im Code für alle stimmt:
- * bei dreihundert Videos ist der Unterschied zwischen 0,01 € und 0,05 € der
- * Unterschied zwischen drei und fünfzehn Euro.
+ * Video. Konfigurierbar, weil der Preis vom gewählten Actor abhängt und keine
+ * Zahl im Code für alle stimmt: bei dreihundert Videos ist der Unterschied
+ * zwischen 0,01 € und 0,05 € der Unterschied zwischen drei und fünfzehn Euro.
+ *
+ * Der Vorgabewert stand auf 40 000 (rund 0,04 €) und war eine Schätzung. Die
+ * Abrechnung sagt etwas anderes. Gemessen am Apify-Posten
+ * `PAID_ACTORS_PER_EVENT` (Abrechnungszyklus ab 2026-09-07, ausgelesen am
+ * 2026-09-09): $0,028134 auf zwölf Actor-Läufe, von denen drei tatsächlich ein
+ * Transkript lieferten. Das sind zwei Lesarten — rund $0,0023 je Aufruf oder
+ * rund $0,0094 je erfolgreich transkribiertem Video. Gezählt wird hier je
+ * Video, also gilt die zweite; genommen ist sie aufgerundet, damit der Posten
+ * eher zu hoch als zu niedrig steht.
+ *
+ * Bewusst nicht überinterpretiert: die Messung umfasst zwei Tage und einen
+ * Actor-Wechsel. Wer den Wert genau haben will, liest ihn nach einem
+ * vollständigen Abrechnungszyklus aus
+ * `GET /v2/users/me/usage/monthly` und teilt durch die Zahl der Videos.
  */
 export const TRANSKRIPT_KOSTEN_MICROS = Number(
-  process.env.TRANSCRIPT_COST_MICROS ?? 40_000,
+  process.env.TRANSCRIPT_COST_MICROS ?? 10_000,
 );
 
 const unbekannteModelle = new Set<string>();

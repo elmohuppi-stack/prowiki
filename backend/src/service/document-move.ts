@@ -33,6 +33,8 @@ import {
 } from "../db/schema.ts";
 import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { stripDeadLinks } from "./wiki-generate.ts";
+import { entferneSlugVerweise, LINKSPALTEN } from "./document.ts";
+import { textArray } from "../db/sql-array.ts";
 
 /** Seitentypen, die eindeutig zu genau einem Dokument gehören. */
 const MOVABLE_PAGE_TYPES = ["summary", "article"];
@@ -348,25 +350,15 @@ export async function moveDocument(
     // herausgefiltert. Der Fließtext der zurückbleibenden Seiten wird bewusst
     // nicht angefasst.
     if (originalSlugs.length > 0) {
-      for (const column of ["in_links", "out_links"] as const) {
-        // Nur Seiten anfassen, die tatsächlich einen der Slugs führen – sonst
-        // bekäme der ganze Wiki ein neues updated_at und die Sortierung
-        // nach "zuletzt geändert" wäre entwertet.
-        await tx.execute(sql`
-          UPDATE wiki_pages
-          SET ${sql.raw(column)} = COALESCE((
-                SELECT jsonb_agg(e)
-                FROM jsonb_array_elements_text(${sql.raw(column)}) AS e
-                WHERE e <> ALL(${originalSlugs})
-              ), '[]'::jsonb),
-              updated_at = now()
-          WHERE wiki_id = ${sourceWorkspaceId}
-            AND EXISTS (
-              SELECT 1
-              FROM jsonb_array_elements_text(${sql.raw(column)}) AS e
-              WHERE e = ANY(${originalSlugs})
-            )
-        `);
+      // Dieselbe Aufräumarbeit wie beim Löschen eines Dokuments, deshalb
+      // dieselbe Abfrage: entferneSlugVerweise fasst nur Seiten an, die
+      // tatsächlich einen der Slugs führen – sonst bekäme der ganze Wiki ein
+      // neues updated_at und die Sortierung nach "zuletzt geändert" wäre
+      // entwertet.
+      for (const column of LINKSPALTEN) {
+        await tx.execute(
+          entferneSlugVerweise(column, sourceWorkspaceId, originalSlugs),
+        );
       }
     }
 
@@ -391,7 +383,7 @@ export async function moveDocument(
             END,
             updated_at = now()
         WHERE wiki_id = ${targetWorkspaceId}
-          AND slug = ANY(${outLinks})
+          AND slug = ANY(${textArray(outLinks)})
       `);
     }
 

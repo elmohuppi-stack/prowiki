@@ -278,6 +278,38 @@ documentRouter.post(
       return c.json({ error: "Could not fetch video information" }, 400);
     }
 
+    /**
+     * Ohne Transkript kein Dokument.
+     *
+     * Vorher entstand die Zeile trotzdem — mit Titel, Kanal und Dauer, aber
+     * ohne einen Satz Inhalt, und das Protokoll meldete `completed`. Für den
+     * Nutzer sah das wie ein gelungener Import aus, für Chunking, Suche und
+     * Wiki-Generierung war das Dokument wertlos, und die 0 Zeichen fielen erst
+     * beim Öffnen auf. Ein Fehlschlag, der als solcher dasteht, ist besser.
+     *
+     * Der Abruf ist an dieser Stelle bereits bezahlt und gezählt (siehe
+     * service/youtube.ts) — daran ändert der Abbruch nichts, er verhindert nur
+     * die irreführende Zeile.
+     */
+    if (!info.transcript.trim()) {
+      console.log(`[doc] ❌ Kein Transkript für „${info.title}"`);
+      await updateLog(logId, {
+        status: "failed",
+        message: `Kein Transkript für „${info.title}” – Dokument nicht angelegt`,
+        details: { url, videoId, title: info.title, transcript_len: 0 },
+        duration_ms: Date.now() - t0,
+      });
+      return c.json(
+        {
+          error:
+            `Für „${info.title}” hat kein Anbieter ein Transkript geliefert. ` +
+            `Das Dokument wurde nicht angelegt, weil ohne Transkript weder ` +
+            `Suche noch Wiki-Generierung etwas damit anfangen können.`,
+        },
+        422,
+      );
+    }
+
     console.log(`[doc] ✅ Video-Titel: "${info.title}"`);
     console.log(`[doc] ✅ Kanal: ${info.channelName}`);
     console.log(`[doc] ✅ Dauer: ${info.duration}s`);

@@ -9,6 +9,7 @@ import {
   transcriptSegments,
 } from "../db/schema.ts";
 import { eq, desc, asc, and, sql, ilike, gte, lte, inArray } from "drizzle-orm";
+import { textArray } from "../db/sql-array.ts";
 
 export type DocumentSort =
   | "created_desc"
@@ -210,6 +211,43 @@ export async function deleteChunks(documentId: string) {
   return geloescht.length;
 }
 
+/** Die beiden jsonb-Linkspalten von wiki_pages. */
+export const LINKSPALTEN = ["in_links", "out_links"] as const;
+
+/**
+ * Entfernt aus einer Linkspalte alle Verweise auf verschwindende Slugs.
+ *
+ * Eigene Funktion, damit sich das erzeugte SQL ohne Datenbank prüfen lässt —
+ * und das ist hier nötig gewesen: die Slug-Liste war als JS-Array direkt im
+ * `sql`-Template gestanden und wurde dadurch zur Parameterliste `($1, $2)`.
+ * `ALL(($1, $2))` lehnt Postgres ab, das Löschen jedes Dokuments mit eigenen
+ * Artikeln schlug mit HTTP 500 fehl (Dokumente ohne Artikel nicht, weil dieser
+ * Zweig bei ihnen gar nicht lief). Siehe db/sql-array.ts.
+ */
+export function entferneSlugVerweise(
+  column: (typeof LINKSPALTEN)[number],
+  wikiId: string,
+  slugs: string[],
+) {
+  const liste = textArray(slugs);
+
+  return sql`
+    UPDATE wiki_pages
+    SET ${sql.raw(column)} = COALESCE((
+          SELECT jsonb_agg(e)
+          FROM jsonb_array_elements_text(${sql.raw(column)}) AS e
+          WHERE e <> ALL(${liste})
+        ), '[]'::jsonb),
+        updated_at = now()
+    WHERE wiki_id = ${wikiId}
+      AND EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements_text(${sql.raw(column)}) AS e
+        WHERE e = ANY(${liste})
+      )
+  `;
+}
+
 export async function deleteDocument(id: string) {
   await db.transaction(async (tx) => {
     const [doc] = await tx
@@ -242,22 +280,8 @@ export async function deleteDocument(id: string) {
 
       // Verweise anderer Seiten auf die verschwindenden Slugs entfernen
       // (in_links/out_links sind jsonb-Arrays).
-      for (const column of ["in_links", "out_links"] as const) {
-        await tx.execute(sql`
-          UPDATE wiki_pages
-          SET ${sql.raw(column)} = COALESCE((
-                SELECT jsonb_agg(e)
-                FROM jsonb_array_elements_text(${sql.raw(column)}) AS e
-                WHERE e <> ALL(${slugs})
-              ), '[]'::jsonb),
-              updated_at = now()
-          WHERE wiki_id = ${doc.wiki_id}
-            AND EXISTS (
-              SELECT 1
-              FROM jsonb_array_elements_text(${sql.raw(column)}) AS e
-              WHERE e = ANY(${slugs})
-            )
-        `);
+      for (const column of LINKSPALTEN) {
+        await tx.execute(entferneSlugVerweise(column, doc.wiki_id, slugs));
       }
 
       await tx
