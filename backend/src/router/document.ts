@@ -247,6 +247,61 @@ documentRouter.post(
     }
     console.log(`[doc] Video-ID: ${videoId}`);
 
+    /**
+     * Idempotenz: dasselbe Video in dasselbe Wiki nur einmal.
+     *
+     * Die Prüfung steht **vor** `fetchYouTubeInfo` und nicht danach. Der
+     * Transkriptabruf ist der teuerste Einzelposten des Imports (Actor-Kette,
+     * bis zu 2 Minuten Laufzeit je Actor, Apify-Guthaben); ihn für ein Video
+     * zu bezahlen, das längst im Wiki steht, ist der eigentliche Schaden am
+     * doppelten Import — die zweite Zeile im Verzeichnis ist nur das, was man
+     * davon sieht.
+     *
+     * Der Anlass ist ein Befund vom 19. September 2026: ein Import auf dem
+     * Handy, der 64 Sekunden dauerte, wurde vom mobilen Browser abgebrochen
+     * (nginx 499) — der Server arbeitete weiter und legte das Dokument an. Der
+     * Nutzer sah keine Antwort, den Knopf weiter als aktiv und tippte erneut:
+     * zwei vollständige Läufe, 60 Sekunden auseinander, zwei Dokumente, zwei
+     * Wiki-Generierungen. Verhindern lässt sich das nicht durch eine
+     * Vordergrund-Anzeige (der Abbruch kommt vom Client), sondern nur dadurch,
+     * dass der zweite Lauf erkennt, dass es nichts zu tun gibt.
+     */
+    const vorhanden = await documentService.findYouTubeDocument(wiki_id, videoId);
+    if (vorhanden) {
+      console.log(
+        `[doc] ⏭️  Video bereits im Wiki (Dokument ${vorhanden.id}) – kein zweiter Import`,
+      );
+      // Die Video-ID nachtragen, wo sie fehlt: alle vor dem 19. September 2026
+      // importierten Videos haben keine, und ohne sie bliebe der Unique-Index
+      // für sie wirkungslos.
+      if (!vorhanden.external_id) {
+        try {
+          await documentService.setExternalId(vorhanden.id, videoId);
+        } catch (e: any) {
+          console.warn(`[doc] ⚠️ external_id nicht nachgetragen:`, e.message);
+        }
+      }
+      await logActivity({
+        action: "youtube_import",
+        status: "skipped",
+        message: `„${vorhanden.title}” ist bereits im Wiki – Übersprungen`,
+        details: { url, videoId, doc_id: vorhanden.id, grund: "duplikat" },
+        wiki_id,
+        document_id: vorhanden.id,
+        user_id: principal.userId!,
+      });
+      return c.json(
+        {
+          document: vorhanden,
+          existing: true,
+          hinweis:
+            `Dieses Video ist bereits in diesem Wiki („${vorhanden.title}”). ` +
+            `Es wurde nichts erneut importiert und nichts berechnet.`,
+        },
+        200,
+      );
+    }
+
     const logId = await logActivity({
       action: "youtube_import",
       status: "started",
@@ -324,6 +379,13 @@ documentRouter.post(
     );
 
     const meta = buildDocumentMetadata(info);
+    /**
+     * `external_id` ist hier kein Beiwerk: es ist der Wert, auf dem der
+     * Unique-Index `documents_wiki_external_unique` steht. Wird er nicht
+     * gesetzt, ist der Index wirkungslos (beide Werte sind NULL, und NULL gilt
+     * in Postgres nie als gleich) — und der einzige Schutz gegen einen
+     * doppelten Import wäre die Prüfung oben.
+     */
     const doc = await documentService.createDocument({
       id: docId,
       wiki_id,
@@ -331,6 +393,7 @@ documentRouter.post(
       type: "youtube",
       source: url,
       source_url: `https://www.youtube.com/watch?v=${videoId}`,
+      external_id: videoId,
       content,
       channel: meta.channel,
       published_at: meta.published_at,

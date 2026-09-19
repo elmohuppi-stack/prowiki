@@ -124,6 +124,12 @@ export async function createDocument(data: {
   type: string;
   source: string;
   source_url?: string;
+  /**
+   * Stabile Kennung beim Anbieter (YouTube-Video-ID). Sie ist der Grund, warum
+   * der Unique-Index `documents_wiki_external_unique` einen zweiten Import
+   * desselben Videos verhindert — ohne sie ist der Import nicht idempotent.
+   */
+  external_id?: string | null;
   content?: string;
   file_path?: string;
   file_size?: number;
@@ -137,6 +143,83 @@ export async function createDocument(data: {
 }) {
   const [doc] = await db.insert(documents).values(data).returning();
   return doc;
+}
+
+/**
+ * Die WHERE-Bedingung der Dublettensuche — als eigene Funktion, damit der Test
+ * das erzeugte SQL prüfen kann. Eine Datenbank braucht er dafür nicht, und der
+ * Fehler, um den es geht (Punkt 2 unten), steckt genau hier: fiele der
+ * Rückgriff auf `source_url` weg, wäre die Funktion für den gesamten
+ * Altbestand wirkungslos, ohne dass irgendetwas fehlschlägt.
+ *
+ * Gesucht wird über drei Wege:
+ *   1. `external_id` — der Weg für alles ab dem 19. September 2026
+ *   2. `source_url`   — der Weg für den Altbestand (YouTube-URL mit Video-ID)
+ *   3. `source`       — Rückfall, wenn jemand die rohe Eingabe-URL gespeichert
+ *                       hat (Kurzform youtu.be, /shorts/, /embed/)
+ */
+export function findYouTubeDocumentWhere(wikiId: string, videoId: string) {
+  return and(
+    eq(documents.wiki_id, wikiId),
+    eq(documents.type, "youtube"),
+    sql`(
+      ${documents.external_id} = ${videoId}
+      or ${documents.source_url} like ${"%" + videoId + "%"}
+      or ${documents.source}     like ${"%" + videoId + "%"}
+    )`,
+  );
+}
+
+/**
+ * Findet ein vorhandenes YouTube-Dokument zu einer Video-ID.
+ *
+ * Die Gegenfrage zu `createDocument`: „Gibt es dieses Video in diesem Wiki
+ * schon?" Der Aufrufer entscheidet daran, ob ein Import ein Duplikat wäre.
+ *
+ * Der Vergleich läuft über `external_id` **und** über die Video-ID in
+ * `source_url`. Das ist kein Gürtel-und-Hosenträger, sondern der Altbestand:
+ * alle vor dem 19. September 2026 importierten Videos haben `external_id` nie
+ * bekommen (der Wert wurde beim Import nicht geschrieben), ein zweiter Import
+ * blieb deshalb folgenlos und legte eine zweite Zeile an. Ohne den Rückgriff
+ * auf `source_url` liefe der Schutz für genau die Dokumente ins Leere, bei
+ * denen der Fehler aufgetreten ist.
+ *
+ * Die älteste Zeile gewinnt (`order by created_at`): bei einem bereits
+ * vorhandenen Duplikat ist die erste die, auf der die Wiki-Artikel hängen.
+ */
+export async function findYouTubeDocument(
+  wikiId: string,
+  videoId: string,
+): Promise<{ id: string; title: string; external_id: string | null } | null> {
+  const [doc] = await db
+    .select({
+      id: documents.id,
+      title: documents.title,
+      external_id: documents.external_id,
+    })
+    .from(documents)
+    .where(findYouTubeDocumentWhere(wikiId, videoId))
+    .orderBy(asc(documents.created_at))
+    .limit(1);
+  return doc ?? null;
+}
+
+/**
+ * Trägt die Video-ID in einer bestehenden Zeile nach.
+ *
+ * Für Dokumente, die vor der Einführung von `external_id` importiert wurden
+ * (und für die angelegte Zeile eines wiederholten Imports). Ohne das bliebe
+ * der Unique-Index für sie wirkungslos und ein dritter Import ginge wieder
+ * durch. Schlägt das Nachtragen fehl, ist das kein Grund, den Import
+ * abzubrechen — der Import selbst steht bereits.
+ */
+export async function setExternalId(id: string, externalId: string) {
+  const [doc] = await db
+    .update(documents)
+    .set({ external_id: externalId, updated_at: new Date() })
+    .where(eq(documents.id, id))
+    .returning();
+  return doc || null;
 }
 
 /** Aktualisiert die Herkunfts-Metadaten (Ebene 2, z.B. YouTube-Refresh). */

@@ -1154,7 +1154,26 @@ async function uploadFile(e: Event) {
   }
 }
 
+/**
+ * Sperre gegen den Doppeltipp.
+ *
+ * `importing`/`youtubing` allein reichen nicht. Sie sind `ref`s, und ob der
+ * deaktivierte Knopf wirklich schon gerendert ist, entscheidet Vue erst im
+ * nächsten Tick — zwei Tipps innerhalb desselben Frames (auf dem Handy der
+ * Normalfall, dort trifft ein Tipp zwei `click`-Events) sehen beide noch
+ * `false` und starten zwei Importe.
+ *
+ * Zusätzlich ist ein Tipp nicht die einzige Quelle: bricht der Browser die
+ * laufende Anfrage ab (mobil nach etwa einer Minute, im nginx-Log als 499
+ * sichtbar), wird `await axios.post` mit einem Fehler beendet, das Flag fällt
+ * auf `false` zurück, und der Knopf steht wieder auf „Importieren" — obwohl
+ * das Backend weiterarbeitet und das Dokument bereits anlegt.
+ */
+const importLäuft = { youtube: false, url: false };
+
 async function importUrl() {
+  if (importLäuft.url) return;
+  importLäuft.url = true;
   importing.value = true;
   urlError.value = "";
   try {
@@ -1170,11 +1189,21 @@ async function importUrl() {
   } catch (e: any) {
     urlError.value = e.response?.data?.error || e.message;
   } finally {
+    importLäuft.url = false;
     importing.value = false;
   }
 }
 
+/**
+ * `existing` meldet das Backend, wenn dasselbe Video schon im Wiki lag.
+ *
+ * Das ist kein Fehler und darf nicht wie einer aussehen: der Nutzer hat
+ * importiert, das Ergebnis steht im Wiki — nur eben schon vorher und ohne
+ * zweite Kosten. Der Text sagt genau das.
+ */
 async function importYoutube() {
+  if (importLäuft.youtube) return;
+  importLäuft.youtube = true;
   youtubing.value = true;
   youtubeError.value = "";
   youtubeInfo.value = "";
@@ -1184,9 +1213,14 @@ async function importYoutube() {
       url: youtubeUrl.value,
       provider_id: chosenProvider.value || undefined,
     });
-    youtubeInfo.value = `✅ ${res.data.document.title}`;
-    if (res.data.wiki_page) {
-      youtubeInfo.value += ` 📖 Wiki: "${res.data.wiki_page.title}"`;
+    if (res.data.existing) {
+      youtubeInfo.value =
+        res.data.hinweis || `ℹ️ „${res.data.document.title}" war bereits im Wiki.`;
+    } else {
+      youtubeInfo.value = `✅ ${res.data.document.title}`;
+      if (res.data.wiki_page) {
+        youtubeInfo.value += ` 📖 Wiki: "${res.data.wiki_page.title}"`;
+      }
     }
     showYoutube.value = false;
     youtubeUrl.value = "";
@@ -1195,6 +1229,7 @@ async function importYoutube() {
   } catch (e: any) {
     youtubeError.value = e.response?.data?.error || e.message;
   } finally {
+    importLäuft.youtube = false;
     youtubing.value = false;
   }
 }

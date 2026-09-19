@@ -9,7 +9,14 @@ import { eq, desc, and, like, sql } from "drizzle-orm";
 
 export interface LogEntry {
   action: string;
-  status?: "started" | "completed" | "failed";
+  /**
+   * `skipped` ist der Ausgang eines Imports, der bewusst nichts getan hat —
+   * heute nur: dasselbe YouTube-Video liegt schon im Wiki. Ohne diesen Wert
+   * müsste der Vorgang als `completed` protokolliert werden, und im
+   * Aktivitätsprotokoll sähe ein übersprungener Import wie ein zweiter
+   * vollzogener aus (genau der Verdacht, den die Dubletten erweckt haben).
+   */
+  status?: "started" | "completed" | "failed" | "skipped";
   message?: string;
   details?: Record<string, unknown>;
   wiki_id?: string;
